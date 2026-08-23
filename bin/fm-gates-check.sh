@@ -26,22 +26,27 @@
 #   gate     at column 0, "- [ ] <id>: <outcome>" or "- [x] <id>: <outcome>" ("X"
 #            counts as ticked). <id> is non-empty, carries no whitespace, and is
 #            declared once in the file.
-#   field    indented by at least one space or tab under its gate, one of
+#   field    indented by at least one space or tab, following its gate line with
+#            nothing but blank lines and its sibling fields in between, one of
 #            "CHECK: <value>", "EXPECT: <value>", "EVIDENCE: <value>". Each value is
 #            non-empty and each key appears at most once per gate. EXPECT is matched
 #            as text, so a CHECK that emits NUL bytes still decides its gate.
 #   abandon  at column 0, "ABANDON: <id> <reason>", both parts non-empty, anywhere in
 #            the file. An id naming no gate is reported as abandon-unknown.
-#   context  ignored: blank lines, lines whose first non-blank character is "#", and
-#            every line that is not trying to be one of the three shapes.
+#   context  ignored as content, but not free-floating. A blank line closes nothing.
+#            Every other line that is neither a gate line nor one of its fields - a
+#            heading, prose, a link bullet, a table row, an abandon, a rejected gate
+#            line - closes the gate above it, so a field that follows belongs to no
+#            gate and is reported with its line number instead of being adopted by a
+#            gate that never declared it. That is the whole rule: the checker cannot
+#            recognise every shape a human might write, so it only ever attaches a
+#            field to the gate it visibly sits under.
 # A line is held to the gate shape when its trimmed form opens a box within its first
 # four characters, meaning a "[" whose content up to the "]" is only spaces, tabs, x,
 # or X. So "* [ ] G2", "-[ ] G2", "- [ x] G2" and "- [ ]G2:" are errors, while the
 # Markdown link bullet "- [issue#2](url)" and ordinary prose stay context.
 # A line whose trimmed form starts with ABANDON, CHECK:, EXPECT:, or EVIDENCE: is held
 # to that shape for the same reason.
-# A rejected gate line closes the gate above it, so the fields that follow are reported
-# as belonging to no gate rather than adopted by a gate that never declared them.
 # EVIDENCE: pending is the literal the intake writes, compared ignoring case and
 # surrounding whitespace; a gate with no EVIDENCE line at all counts as pending
 # too, since a missing line backs a tick even less than a pending one.
@@ -255,7 +260,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   line=${line%$'\r'}
   trimmed=${line#"${line%%[![:space:]]*}"}
   [ -n "$trimmed" ] || continue
-  case "$trimmed" in '#'*) continue ;; esac
+  case "$trimmed" in '#'*) cur=-1; continue ;; esac
 
   if opens_a_box "$trimmed"; then
     if [ "$trimmed" != "$line" ]; then
@@ -303,32 +308,32 @@ while IFS= read -r line || [ -n "$line" ]; do
     ABANDON*)
       if [ "$trimmed" != "$line" ]; then
         parse_error "$lineno" "ABANDON line is indented; it sits at column 0"
-        continue
+        cur=-1; continue
       fi
       case "$line" in
         ABANDON:\ *) ;;
         *)
           parse_error "$lineno" "ABANDON line does not match 'ABANDON: <gate-id> <reason>'"
-          continue ;;
+          cur=-1; continue ;;
       esac
       rest=${line#ABANDON: }
       rest=${rest#"${rest%%[![:space:]]*}"}
       aid=${rest%%[[:space:]]*}
       if [ -z "$aid" ]; then
         parse_error "$lineno" "ABANDON line names no gate id"
-        continue
+        cur=-1; continue
       fi
       reason=${rest#"$aid"}
       reason=${reason#"${reason%%[![:space:]]*}"}
       reason=${reason%"${reason##*[![:space:]]}"}
       if [ -z "$reason" ]; then
         parse_error "$lineno" "ABANDON of $aid gives no reason"
-        continue
+        cur=-1; continue
       fi
       ABANDON_IDS+=("$aid"); ABANDON_REASONS+=("$reason")
-      continue ;;
+      cur=-1; continue ;;
     CHECK:*|EXPECT:*|EVIDENCE:*) ;;
-    *) continue ;;
+    *) cur=-1; continue ;;
   esac
 
   key=${trimmed%%:*}

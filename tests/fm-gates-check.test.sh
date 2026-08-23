@@ -246,6 +246,7 @@ done <<TABLE
 a file of nothing but valid shapes|$REF||0
 a link bullet is context|- [firstmate#2](https://example.invalid/issues/2)\n$REF||0
 a heading and prose are context|# Gates for t1\ncontext for the reviewer\n$REF||0
+blank lines between a gate and its fields|- [ ] G1: the reference gate\n\n  CHECK: cat README.md\n\n  EXPECT: hello\n\n  EVIDENCE: pending||0
 an asterisk bullet|$REF\n* [ ] G2: an asterisk bullet|5|1
 no space after the dash|$REF\n-[ ] G2: x|5|1
 two spaces before the box|$REF\n-  [ ] G2: x|5|1
@@ -268,8 +269,41 @@ an indented abandon|$REF\n ABANDON: G1 indented|5|1
 an abandon with no reason|$REF\nABANDON: G1|5|1
 an abandon with no id|$REF\nABANDON:   |5|1
 TABLE
-[ "$rows" -eq 24 ] || fail "the grammar table ran $rows rows, not 24"
+[ "$rows" -eq 25 ] || fail "the grammar table ran $rows rows, not 25"
 pass "the grammar takes its three shapes, ignores context, and reports every slip"
+
+# 8g. A line the checker does not recognise closes the gate above it, so a field
+#     that follows is reported rather than quietly filling that gate's hole. The
+#     reference gate declares CHECK and EVIDENCE but no EXPECT, and its output
+#     contains the stray EXPECT, so an adopted field would flip it to satisfied.
+ADOPT='- [ ] G1: the suite passes with no failures\n  CHECK: echo "3 tests, 2 failures"\n  EVIDENCE: pending'
+rows=0
+while IFS='|' read -r desc stray errs; do
+  case "$desc" in ''|'#'*) continue ;; esac
+  rows=$((rows + 1))
+  printf '%b\n' "$ADOPT\n$stray\n  EXPECT: 3 tests" > "$GATES"
+  out=$(run t1 2>&1 </dev/null); rc=$?
+  [ "$rc" -eq 1 ] || fail "$desc: expected exit 1, got $rc: $out"
+  grep -q '^G1: unsatisfied.*no EXPECT line' <<<"$out" \
+    || fail "$desc: G1 was decided on an EXPECT it never declared: $out"
+  n=0
+  for e in $errs; do
+    n=$((n + 1))
+    grep -q "^gates.md:$e: parse-error" <<<"$out" || fail "$desc: line $e was not reported: $out"
+  done
+  grep -q " parse_errors=$n exit=1\$" "$RESULT" \
+    || fail "$desc: summary does not match the verdict: $(tail -1 "$RESULT")"
+done <<TABLE
+a bullet with no checkbox|- G2: forgot the checkbox|5
+a numbered task bullet|10. [ ] G2: tenth gate|5
+a blockquoted gate|> - [ ] G2: a blockquoted gate|5
+a plain prose note|note: G2 was moved to a follow-up|5
+a heading|## G2 notes|5
+an abandon of another gate|ABANDON: G9 dropped elsewhere|5
+a rejected gate line|* [ ] G2: an asterisk bullet|4 5
+TABLE
+[ "$rows" -eq 7 ] || fail "the adoption table ran $rows rows, not 7"
+pass "a stray line closes the gate above it instead of feeding it"
 
 # 8i. Padding after the checkbox does not change the gate id an ABANDON must name.
 cat > "$GATES" <<'GATES_EOF'
