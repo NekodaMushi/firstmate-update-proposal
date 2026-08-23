@@ -32,7 +32,11 @@
 #            non-empty and each key appears at most once per gate. EXPECT is matched
 #            as text, so a CHECK that emits NUL bytes still decides its gate.
 #   abandon  at column 0, "ABANDON: <id> <reason>", both parts non-empty, anywhere in
-#            the file. An id naming no gate is reported as abandon-unknown.
+#            the file, and at most one per id: a second ABANDON naming an id an
+#            earlier line already abandoned is a parse error on that second line,
+#            like a gate id declared twice, so the newer reason is never dropped
+#            behind the older one. An id naming no gate is reported as
+#            abandon-unknown.
 #   context  ignored as content, but not free-floating. A gate stays open only while
 #            what follows it is blank lines and accepted field lines; every other
 #            non-blank line closes it, whether that is a heading, prose, a link
@@ -109,7 +113,10 @@
 #                          Uses timeout(1) or gtimeout(1) when present, else a
 #                          perl fallback that runs the CHECK in its own process
 #                          group and tears that group down on ALRM, HUP, INT, or
-#                          TERM; a timed-out CHECK is unsatisfied.
+#                          TERM; a timed-out CHECK is unsatisfied. Both paths
+#                          escalate: TERM at the deadline, KILL a short grace
+#                          later, so a CHECK that ignores TERM cannot outlive its
+#                          own wall clock.
 #
 # Environment:
 #   FM_HOME, FM_DATA_OVERRIDE, FM_STATE_OVERRIDE  the usual home overrides.
@@ -126,6 +133,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 OUTPUT_LINES=20
 OUTPUT_CONTEXT=3
+KILL_GRACE=2
 
 usage() {
   sed -n '2,/^set -eu/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -194,15 +202,23 @@ evidence_is_pending() {
 
 # Run one CHECK in the copy with the per-gate timeout; echo its combined output.
 # Return 124 on timeout (same as timeout(1)); any other code is the CHECK's own.
+# timeout(1) reports 137 when it had to escalate to KILL, which is a timeout on
+# the wall clock and is reported as one; a CHECK that dies of 137 before the
+# deadline keeps its own code.
 run_check() {
-  local cmd=$1
+  local cmd=$1 rc=0 started
+  started=$(date +%s)
   if [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
-    (cd "$COPY" && timeout "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null)
+    (cd "$COPY" && timeout -k "$KILL_GRACE" "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null) 2>/dev/null || rc=$?
   elif [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v gtimeout >/dev/null 2>&1; then
-    (cd "$COPY" && gtimeout "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null)
+    (cd "$COPY" && gtimeout -k "$KILL_GRACE" "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null) 2>/dev/null || rc=$?
   else
-    (cd "$COPY" && perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } my $stop = sub { $SIG{HUP} = $SIG{INT} = $SIG{TERM} = "IGNORE"; kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; waitpid $pid, 0; exit 124 }; local $SIG{ALRM} = $stop; local $SIG{HUP} = $stop; local $SIG{INT} = $stop; local $SIG{TERM} = $stop; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null)
+    (cd "$COPY" && perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } my $stop = sub { $SIG{HUP} = $SIG{INT} = $SIG{TERM} = "IGNORE"; kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; waitpid $pid, 0; exit 124 }; local $SIG{ALRM} = $stop; local $SIG{HUP} = $stop; local $SIG{INT} = $stop; local $SIG{TERM} = $stop; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null) || rc=$?
   fi
+  if [ "$rc" -eq 137 ] && [ "$(( $(date +%s) - started ))" -ge "$TIMEOUT" ]; then
+    rc=124
+  fi
+  return "$rc"
 }
 
 # --- parse gates.md into parallel arrays -----------------------------------
@@ -230,6 +246,14 @@ gate_index() {
   local id=$1 i
   for i in "${!GATE_IDS[@]}"; do
     [ "${GATE_IDS[$i]}" = "$id" ] && { echo "$i"; return 0; }
+  done
+  return 1
+}
+
+abandon_index() {
+  local id=$1 i
+  for i in "${!ABANDON_IDS[@]}"; do
+    [ "${ABANDON_IDS[$i]}" = "$id" ] && { echo "$i"; return 0; }
   done
   return 1
 }
@@ -331,6 +355,10 @@ while IFS= read -r line || [ -n "$line" ]; do
         parse_error "$lineno" "ABANDON of $aid gives no reason"
         cur=-1; continue
       fi
+      if abandon_index "$aid" >/dev/null; then
+        parse_error "$lineno" "gate '$aid' is already abandoned by an earlier ABANDON"
+        cur=-1; continue
+      fi
       ABANDON_IDS+=("$aid"); ABANDON_REASONS+=("$reason")
       cur=-1; continue ;;
     CHECK:*|EXPECT:*|EVIDENCE:*) ;;
@@ -369,14 +397,6 @@ while IFS= read -r line || [ -n "$line" ]; do
       GATE_EVIDENCES[cur]=$value; GATE_HAS_EVIDENCE[cur]=1 ;;
   esac
 done < "$GATES"
-
-abandon_index() {
-  local id=$1 i
-  for i in "${!ABANDON_IDS[@]}"; do
-    [ "${ABANDON_IDS[$i]}" = "$id" ] && { echo "$i"; return 0; }
-  done
-  return 1
-}
 
 # --- run ---------------------------------------------------------------------
 HEAD=$(git -C "$COPY" rev-parse HEAD 2>/dev/null || echo unknown)
@@ -530,7 +550,7 @@ fi
   echo "## Summary"
   echo "$SUMMARY exit=$exit_code"
 } >> "$TMP"
-chmod 644 "$TMP"
+chmod 600 "$TMP"
 mv -f "$TMP" "$RESULT"
 trap - EXIT
 echo "summary: $SUMMARY -> $RESULT"

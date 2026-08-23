@@ -55,6 +55,14 @@ BEFORE=$(cat "$GATES")
 
 run() { FM_HOME="$HOME_DIR" "$CHECK" "$@"; }
 
+file_mode() {
+  if [ "$(uname)" = Darwin ]; then
+    stat -f %Lp "$1"
+  else
+    stat -c %a "$1"
+  fi
+}
+
 # 1. Mixed file: true, false, abandoned, hand-ticked -> exit 1 with each verdict.
 out=$(run t1 2>&1); rc=$?
 [ "$rc" -eq 1 ] || fail "mixed gates should exit 1, got $rc: $out"
@@ -88,7 +96,9 @@ pass "gates-result.md carries head, timestamp, excerpts, and summary"
 [ ! -e "$REPO/ran-g3.txt" ] || fail "abandoned gate's CHECK was executed"
 extra=$(find "$HOME_DIR/data/t1" -mindepth 1 ! -name gates.md ! -name gates-result.md)
 [ -z "$extra" ] || fail "unexpected files written: $extra"
-pass "only gates-result.md is written"
+mode=$(file_mode "$RESULT")
+[ "$mode" = 600 ] || fail "gates-result.md landed with mode $mode, not 600"
+pass "only gates-result.md is written, and it stays private"
 
 # 4. Accepting the abandon removes it from the failure set but G2/G4 still fail.
 out=$(run t1 --accept-abandon G3 2>&1); rc=$?
@@ -160,6 +170,23 @@ elapsed=$(( $(date +%s) - start ))
 grep -q 'timed out' <<<"$out" || fail "perl fallback did not report the timeout: $out"
 [ "$elapsed" -lt 4 ] || fail "perl fallback did not cut the CHECK short (${elapsed}s)"
 pass "per-CHECK timeout is enforced on both the timeout(1) and the perl paths"
+
+# 7b. A CHECK that ignores TERM is killed anyway, so the wall clock is binding on
+#     the timeout(1) path as much as on the perl one.
+cat > "$GATES" <<'GATES_EOF'
+- [ ] G1: deaf to TERM
+  CHECK: trap '' TERM; sleep 30; echo done
+  EXPECT: done
+  EVIDENCE: pending
+GATES_EOF
+start=$(date +%s)
+out=$(run t1 --timeout 1 2> "$TMP_ROOT/deaf.err"); rc=$?
+elapsed=$(( $(date +%s) - start ))
+[ "$rc" -eq 1 ] || fail "a CHECK that ignores TERM should still exit 1, got $rc: $out"
+grep -q 'timed out' <<<"$out" || fail "the killed CHECK was not reported as a timeout: $out"
+[ "$elapsed" -lt 15 ] || fail "a CHECK that ignores TERM outlived its wall clock (${elapsed}s)"
+[ ! -s "$TMP_ROOT/deaf.err" ] || fail "the kill left noise on stderr: $(cat "$TMP_ROOT/deaf.err")"
+pass "a CHECK that ignores TERM is killed at the deadline, quietly"
 
 # 8. An ABANDON naming an unknown gate is reported and fails.
 cat > "$GATES" <<'GATES_EOF'
@@ -268,8 +295,9 @@ an abandon with no space after the colon|$REF\nABANDON:G1 no space|5|1
 an indented abandon|$REF\n ABANDON: G1 indented|5|1
 an abandon with no reason|$REF\nABANDON: G1|5|1
 an abandon with no id|$REF\nABANDON:   |5|1
+an id abandoned twice|$REF\nABANDON: G9 dropped\nABANDON: G9 dropped again|6|1
 TABLE
-[ "$rows" -eq 25 ] || fail "the grammar table ran $rows rows, not 25"
+[ "$rows" -eq 26 ] || fail "the grammar table ran $rows rows, not 26"
 pass "the grammar takes its three shapes, ignores context, and reports every slip"
 
 # 8g. A line the checker does not recognise closes the gate above it, so a field
@@ -307,6 +335,39 @@ an indented field with no value|  EXPECT:   |4 5
 TABLE
 [ "$rows" -eq 10 ] || fail "the adoption table ran $rows rows, not 10"
 pass "a stray line closes the gate above it instead of feeding it"
+
+# 8h. A second ABANDON of a gate already abandoned is refused on its own line, so
+#     the newer reason cannot be buried behind the older one, and a repeated
+#     ABANDON of a gate that does not exist is still one abandon-unknown.
+cat > "$GATES" <<'GATES_EOF'
+- [ ] G1: ok
+  CHECK: cat README.md
+  EXPECT: hello
+  EVIDENCE: pending
+ABANDON: G1 dropped
+ABANDON: G1 actually shipped
+GATES_EOF
+out=$(run t1 --accept-abandon G1 2>&1); rc=$?
+[ "$rc" -eq 1 ] || fail "a repeated ABANDON should exit 1, got $rc: $out"
+grep -q '^gates.md:6: parse-error' <<<"$out" || fail "the second ABANDON was not reported: $out"
+grep -q 'actually shipped' "$RESULT" && fail "the second reason was recorded as if it were accepted"
+grep -q ' abandoned=1 ' "$RESULT" || fail "the repeat inflated the abandon count: $(tail -1 "$RESULT")"
+grep -q ' parse_errors=1 exit=1$' "$RESULT" || fail "summary wrong: $(tail -1 "$RESULT")"
+
+cat > "$GATES" <<'GATES_EOF'
+- [ ] G1: ok
+  CHECK: cat README.md
+  EXPECT: hello
+  EVIDENCE: pending
+ABANDON: G9 typo
+ABANDON: G9 typo again
+GATES_EOF
+out=$(run t1 2>&1); rc=$?
+[ "$rc" -eq 1 ] || fail "a repeated unknown ABANDON should exit 1, got $rc: $out"
+[ "$(grep -c '^## G9: abandon-unknown' "$RESULT")" -eq 1 ] \
+  || fail "one unknown gate was reported more than once: $(cat "$RESULT")"
+grep -q 'abandon_unknown=1 ' "$RESULT" || fail "the repeat inflated abandon_unknown: $(tail -1 "$RESULT")"
+pass "an id is abandoned once, and a repeat is reported instead of silently applied"
 
 # 8i. Padding after the checkbox does not change the gate id an ABANDON must name.
 cat > "$GATES" <<'GATES_EOF'
