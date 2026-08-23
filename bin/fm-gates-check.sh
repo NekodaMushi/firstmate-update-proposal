@@ -20,8 +20,12 @@
 # A gate is the checkbox line plus its indented CHECK/EVIDENCE/EXPECT lines; gate ids
 # are free-form tokens before the colon (G1, G2a, ...). Every other line is ignored.
 # ABANDON lines stand on their own line, anywhere in the file, and name a gate id.
-# EVIDENCE: pending is the literal the intake writes; any other value is treated
-# as evidence already recorded elsewhere and does not change the verdict here.
+# EVIDENCE: pending is the literal the intake writes, compared ignoring case and
+# surrounding whitespace; a gate with no EVIDENCE line at all counts as pending
+# too, since a missing line backs a tick even less than a pending one.
+# Any other value is treated as evidence already recorded elsewhere and does not
+# change the verdict here.
+# A CR at the end of a line is stripped, so a CRLF gates.md parses like any other.
 #
 # Verdicts, one per gate:
 #   satisfied   the CHECK ran, exited, and its output contained EXPECT.
@@ -36,6 +40,9 @@
 #               until the caller passes --accept-abandon <id> for that exact id.
 #               An ABANDON naming a gate that does not exist is reported and also
 #               keeps the exit code non-zero.
+#   unparseable a gates.md that exists but declares no gate line at all. Reported
+#               once against the file rather than a gate: nothing could be
+#               checked, and a malformed intake file must not read as a pass.
 #
 # gates-result.md layout (this header is its single owner):
 #   # Gates result for <id>
@@ -44,16 +51,21 @@
 #   checked: <UTC ISO-8601 timestamp>
 #   timeout: <seconds per CHECK>
 #   ## <gate-id>: satisfied|unsatisfied|abandoned|abandon-unknown
+#   ## gates.md: unparseable
 #   reason: <one line: why the verdict was reached>
-#   output: <up to 20 lines of the CHECK's combined output, fenced, when it ran>
+#   output: <the excerpt that decided the verdict, fenced, when the CHECK ran:
+#            the first line containing EXPECT with 3 lines of context each side,
+#            or the last 20 lines when no line matched. The fence is grown past
+#            the longest backtick run in the excerpt, so a CHECK that prints
+#            Markdown cannot close the block early.>
 #   ## Summary
-#   satisfied=<n> unsatisfied=<n> abandoned=<n> accepted=<n> exit=<code>
+#   satisfied=<n> unsatisfied=<n> abandoned=<n> accepted=<n> abandon_unknown=<n> unparseable=<n> exit=<code>
 # The file is replaced atomically on each run; the previous run is not kept.
 #
 # Exit codes:
 #   0 every gate satisfied, and every abandoned gate accepted on this command line.
 #   1 at least one gate unsatisfied, or an abandoned gate not accepted, or an
-#     ABANDON naming an unknown gate.
+#     ABANDON naming an unknown gate, or a gates.md that declares no gate at all.
 #   2 usage error, unreadable meta or copy, or no worktree= in the meta.
 # A task with no data/<id>/gates.md prints "no gates for <id>" and exits 0 without
 # writing gates-result.md: nothing was declared, so nothing is owed.
@@ -67,6 +79,8 @@
 # Environment:
 #   FM_HOME, FM_DATA_OVERRIDE, FM_STATE_OVERRIDE  the usual home overrides.
 #   FM_GATES_TIMEOUT  default per-CHECK timeout in seconds.
+#   FM_CHECK_FORCE_FALLBACK=1  skip timeout(1)/gtimeout(1) and use the perl
+#                     fallback, so the fallback path is reachable in tests.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -76,6 +90,7 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 OUTPUT_LINES=20
+OUTPUT_CONTEXT=3
 
 usage() {
   sed -n '2,/^set -eu/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -120,7 +135,7 @@ if [ ! -f "$GATES" ]; then
   exit 0
 fi
 [ -f "$META" ] || die "no meta for task $ID at $META"
-COPY=$(grep '^worktree=' "$META" | head -1 | cut -d= -f2-)
+COPY=$(grep '^worktree=' "$META" | tail -1 | cut -d= -f2-)
 [ -n "$COPY" ] || die "meta $META has no worktree= line; cannot locate the task's copy"
 [ -d "$COPY" ] || die "task copy $COPY does not exist"
 
@@ -132,13 +147,23 @@ is_accepted() {
   return 1
 }
 
+# A tick is unbacked while its evidence is still pending, whatever the case or
+# padding, and an absent EVIDENCE line is weaker still, so it counts as pending.
+evidence_is_pending() {
+  local v=$1
+  v=${v#"${v%%[![:space:]]*}"}
+  v=${v%"${v##*[![:space:]]}"}
+  [ -n "$v" ] || return 0
+  [ "$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')" = pending ]
+}
+
 # Run one CHECK in the copy with the per-gate timeout; echo its combined output.
 # Return 124 on timeout (same as timeout(1)); any other code is the CHECK's own.
 run_check() {
   local cmd=$1
-  if command -v timeout >/dev/null 2>&1; then
+  if [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
     (cd "$COPY" && timeout "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null)
-  elif command -v gtimeout >/dev/null 2>&1; then
+  elif [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v gtimeout >/dev/null 2>&1; then
     (cd "$COPY" && gtimeout "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null)
   else
     (cd "$COPY" && perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } my $stop = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; waitpid $pid, 0; exit 124 }; local $SIG{ALRM} = $stop; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null)
@@ -155,6 +180,7 @@ ABANDON_IDS=()
 ABANDON_REASONS=()
 cur=-1
 while IFS= read -r line || [ -n "$line" ]; do
+  line=${line%$'\r'}
   case "$line" in
     -\ \[\ \]\ *:*|-\ \[[xX]\]\ *:*)
       box=${line:3:1}
@@ -199,9 +225,10 @@ abandon_index() {
 # --- run ---------------------------------------------------------------------
 HEAD=$(git -C "$COPY" rev-parse HEAD 2>/dev/null || echo unknown)
 STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-n_sat=0; n_unsat=0; n_aband=0; n_acc=0; n_unknown=0
+n_sat=0; n_unsat=0; n_aband=0; n_acc=0; n_unknown=0; n_unparseable=0
+out=
 TMP=$(mktemp "$DATA/$ID/.gates-result.XXXXXX")
-trap 'rm -f "$TMP"' EXIT
+trap 'rm -f "$TMP" ${out:+"$out"}' EXIT
 
 {
   echo "# Gates result for $ID"
@@ -212,20 +239,60 @@ trap 'rm -f "$TMP"' EXIT
   echo
 } > "$TMP"
 
-emit() {  # <id> <verdict> <reason> [output-file]
+# The output that decided the verdict: the first line containing EXPECT with
+# OUTPUT_CONTEXT lines each side, or the tail when no line matched, so a verbose
+# CHECK still records the match rather than its opening banner.
+excerpt() {  # <output-file> [expect]
+  local file=$1 expect=${2-} n from to
+  if [ -n "$expect" ]; then
+    n=$(grep -nF -m1 -e "$expect" "$file" | cut -d: -f1) || true
+    if [ -n "$n" ]; then
+      from=$((n - OUTPUT_CONTEXT))
+      [ "$from" -ge 1 ] || from=1
+      to=$((n + OUTPUT_CONTEXT))
+      sed -n "${from},${to}p" "$file"
+      return 0
+    fi
+  fi
+  tail -n "$OUTPUT_LINES" "$file"
+}
+
+# A fence longer than the longest backtick run the excerpt opens a line with,
+# so a CHECK that prints Markdown cannot close the block early.
+fence_for() {
+  local longest len
+  longest=$(printf '%s\n' "$1" | sed -n 's/^ \{0,3\}\(`\{3,\}\).*/\1/p' |
+    awk '{ if (length($0) > n) n = length($0) } END { print n + 0 }')
+  len=3
+  [ "$longest" -lt 3 ] || len=$((longest + 1))
+  printf '%*s' "$len" '' | tr ' ' '`'
+}
+
+emit() {  # <id> <verdict> <reason> [output-file] [expect]
+  local body fence
   {
     echo "## $1: $2"
     echo "reason: $3"
     if [ $# -ge 4 ] && [ -s "$4" ]; then
-      echo "output:"
-      echo '```'
-      head -n "$OUTPUT_LINES" "$4"
-      echo '```'
+      body=$(excerpt "$4" "${5-}")
+      if [ -n "$body" ]; then
+        fence=$(fence_for "$body")
+        echo "output:"
+        echo "$fence"
+        printf '%s\n' "$body"
+        echo "$fence"
+      fi
     fi
     echo
   } >> "$TMP"
   echo "$1: $2 - $3"
 }
+
+if [ "${#GATE_IDS[@]}" -eq 0 ]; then
+  n_unparseable=1
+  emit gates.md unparseable \
+    "$GATES exists but declares no gate line; a file that checks nothing is not a clean pass"
+fi
 
 for i in "${!GATE_IDS[@]}"; do
   gid=${GATE_IDS[$i]}
@@ -257,18 +324,18 @@ for i in "${!GATE_IDS[@]}"; do
   if [ "$rc" -eq 124 ]; then
     n_unsat=$((n_unsat + 1))
     emit "$gid" unsatisfied "CHECK timed out after ${TIMEOUT}s" "$out"
-    rm -f "$out"; continue
+    rm -f "$out"; out=; continue
   fi
-  if grep -qF -- "$expect" "$out"; then
-    if [ "$box" != " " ] && [ "$evidence" = pending ]; then
+  if grep -qF -e "$expect" "$out"; then
+    if [ "$box" != " " ] && evidence_is_pending "$evidence"; then
       n_unsat=$((n_unsat + 1))
-      emit "$gid" unsatisfied "box ticked by hand while EVIDENCE is still pending; the tick is an unbacked claim (CHECK output did contain EXPECT, exit $rc)" "$out"
+      emit "$gid" unsatisfied "box ticked by hand while EVIDENCE is still pending; the tick is an unbacked claim (CHECK output did contain EXPECT, exit $rc)" "$out" "$expect"
     else
       n_sat=$((n_sat + 1))
-      emit "$gid" satisfied "output contained EXPECT '$expect' (exit $rc)" "$out"
+      emit "$gid" satisfied "output contained EXPECT '$expect' (exit $rc)" "$out" "$expect"
     fi
   else
-    if [ "$box" != " " ] && [ "$evidence" = pending ]; then
+    if [ "$box" != " " ] && evidence_is_pending "$evidence"; then
       n_unsat=$((n_unsat + 1))
       emit "$gid" unsatisfied "box ticked by hand while EVIDENCE is still pending, and output lacked EXPECT '$expect' (exit $rc)" "$out"
     else
@@ -276,7 +343,7 @@ for i in "${!GATE_IDS[@]}"; do
       emit "$gid" unsatisfied "output lacked EXPECT '$expect' (exit $rc)" "$out"
     fi
   fi
-  rm -f "$out"
+  rm -f "$out"; out=
 done
 
 for i in "${!ABANDON_IDS[@]}"; do
@@ -290,16 +357,19 @@ for i in "${!ABANDON_IDS[@]}"; do
   emit "$aid" abandon-unknown "ABANDON names a gate that does not exist in $GATES"
 done
 
+SUMMARY="satisfied=$n_sat unsatisfied=$n_unsat abandoned=$n_aband accepted=$n_acc"
+SUMMARY="$SUMMARY abandon_unknown=$n_unknown unparseable=$n_unparseable"
 exit_code=0
-if [ "$n_unsat" -gt 0 ] || [ "$n_unknown" -gt 0 ] || [ "$n_aband" -ne "$n_acc" ]; then
+if [ "$n_unsat" -gt 0 ] || [ "$n_unknown" -gt 0 ] || [ "$n_unparseable" -gt 0 ] ||
+  [ "$n_aband" -ne "$n_acc" ]; then
   exit_code=1
 fi
 {
   echo "## Summary"
-  echo "satisfied=$n_sat unsatisfied=$n_unsat abandoned=$n_aband accepted=$n_acc exit=$exit_code"
+  echo "$SUMMARY exit=$exit_code"
 } >> "$TMP"
 chmod 644 "$TMP"
 mv -f "$TMP" "$RESULT"
 trap - EXIT
-echo "summary: satisfied=$n_sat unsatisfied=$n_unsat abandoned=$n_aband accepted=$n_acc -> $RESULT"
+echo "summary: $SUMMARY -> $RESULT"
 exit "$exit_code"

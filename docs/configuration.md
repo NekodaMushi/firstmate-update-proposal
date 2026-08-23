@@ -32,6 +32,7 @@ An `ABANDON: <gate-id> <reason>` line on its own withdraws a gate without deleti
 `bin/fm-gates-check.sh <id>` runs every `CHECK:` inside the task's isolated copy resolved from `worktree=` in `state/<id>.meta`, under a per-command timeout, and writes the verdicts to `data/<id>/gates-result.md`.
 That script's header is the single owner of both file formats, the verdict rules (including why a hand-ticked box with pending evidence is refused and why an abandon keeps the exit code non-zero until accepted), and the exit codes.
 The checker never edits `gates.md` or any file in the copy; `gates-result.md` is the only file it writes, and a task with no `gates.md` is an explicit no-op.
+A `gates.md` that is present but declares no parseable gate fails instead, so a malformed intake file cannot read as a clean run.
 
 ## Pi Calm preference (config/calm)
 

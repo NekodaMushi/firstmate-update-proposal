@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Behavior tests for bin/fm-gates-check.sh on a disposable repo: a true gate,
-# a false gate, an abandoned gate, a hand-ticked box with pending evidence, a
-# task with no gates.md, a timed-out CHECK, and the no-write guarantees.
+# a false gate, an abandoned gate, the three hand-ticked shapes (pending, oddly
+# cased pending, no EVIDENCE line at all), a task with no gates.md, a gates.md
+# that declares nothing parseable, a timed-out CHECK through both the timeout(1)
+# and the perl paths, the deciding excerpt, and the no-write guarantees.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -39,8 +41,14 @@ cat > "$GATES" <<'GATES_EOF'
   CHECK: cat README.md
   EXPECT: hello
   EVIDENCE: pending
+- [x] G5: ticked by hand with no evidence line at all
+  CHECK: cat README.md
+  EXPECT: hello
 ABANDON: G3 upstream removed the feature
 GATES_EOF
+# Appended rather than written in the heredoc so the padding an editor would
+# strip stays part of the fixture.
+printf -- '- [x] G6: ticked by hand with an oddly written pending\n  CHECK: cat README.md\n  EXPECT: hello\n  EVIDENCE:   Pending  \n' >> "$GATES"
 BEFORE=$(cat "$GATES")
 
 run() { FM_HOME="$HOME_DIR" "$CHECK" "$@"; }
@@ -52,7 +60,9 @@ grep -q '^G1: satisfied' <<<"$out" || fail "G1 should be satisfied: $out"
 grep -q '^G2: unsatisfied' <<<"$out" || fail "G2 should be unsatisfied: $out"
 grep -q '^G3: abandoned' <<<"$out" || fail "G3 should be abandoned: $out"
 grep -q '^G4: unsatisfied.*ticked by hand' <<<"$out" || fail "G4 hand tick should be unsatisfied explicitly: $out"
-pass "true gate satisfied, false gate refused, abandoned reported, hand tick refused"
+grep -q '^G5: unsatisfied.*ticked by hand' <<<"$out" || fail "G5 tick without an EVIDENCE line should be unsatisfied: $out"
+grep -q '^G6: unsatisfied.*ticked by hand' <<<"$out" || fail "G6 padded, capitalised pending should be unsatisfied: $out"
+pass "true gate satisfied, false gate refused, abandoned reported, every hand-tick shape refused"
 
 # 2. gates-result.md records head, timestamp, per-gate output, and summary.
 [ -f "$RESULT" ] || fail "gates-result.md missing"
@@ -64,7 +74,8 @@ grep -q '^## G2: unsatisfied' "$RESULT" || fail "result lacks G2 section"
 grep -q '^## G3: abandoned' "$RESULT" || fail "result lacks G3 section"
 grep -q '^## G4: unsatisfied' "$RESULT" || fail "result lacks G4 section"
 grep -q 'upstream removed the feature' "$RESULT" || fail "abandon reason not recorded"
-grep -q '^satisfied=1 unsatisfied=2 abandoned=1 accepted=0 exit=1$' "$RESULT" || fail "summary wrong: $(tail -1 "$RESULT")"
+grep -q '^satisfied=1 unsatisfied=4 abandoned=1 accepted=0 abandon_unknown=0 unparseable=0 exit=1$' "$RESULT" \
+  || fail "summary wrong: $(tail -1 "$RESULT")"
 awk '/^## G2/,/^## G3/' "$RESULT" | grep -q '^hello$' || fail "deciding output excerpt missing for G2"
 pass "gates-result.md carries head, timestamp, excerpts, and summary"
 
@@ -99,7 +110,8 @@ run t1 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 1 ] || fail "unaccepted abandon should keep exit non-zero, got $rc"
 run t1 --accept-abandon G2 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 0 ] || fail "all satisfied plus accepted abandon should exit 0, got $rc"
-grep -q '^satisfied=1 unsatisfied=0 abandoned=1 accepted=1 exit=0$' "$RESULT" || fail "summary wrong after accept"
+grep -q '^satisfied=1 unsatisfied=0 abandoned=1 accepted=1 abandon_unknown=0 unparseable=0 exit=0$' "$RESULT" \
+  || fail "summary wrong after accept"
 pass "exit code is zero only once every abandon is accepted"
 
 # 6. A hand-ticked box with non-pending evidence is not refused by the tick alone.
@@ -126,7 +138,16 @@ elapsed=$(( $(date +%s) - start ))
 [ "$rc" -eq 1 ] || fail "timed-out CHECK should exit 1, got $rc"
 grep -q 'timed out' <<<"$out" || fail "timeout not reported: $out"
 [ "$elapsed" -lt 4 ] || fail "timeout did not cut the CHECK short (${elapsed}s)"
-pass "per-CHECK timeout is enforced"
+
+export FM_CHECK_FORCE_FALLBACK=1
+start=$(date +%s)
+out=$(run t1 --timeout 1 2>&1); rc=$?
+elapsed=$(( $(date +%s) - start ))
+unset FM_CHECK_FORCE_FALLBACK
+[ "$rc" -eq 1 ] || fail "timed-out CHECK on the perl fallback should exit 1, got $rc"
+grep -q 'timed out' <<<"$out" || fail "perl fallback did not report the timeout: $out"
+[ "$elapsed" -lt 4 ] || fail "perl fallback did not cut the CHECK short (${elapsed}s)"
+pass "per-CHECK timeout is enforced on both the timeout(1) and the perl paths"
 
 # 8. An ABANDON naming an unknown gate is reported and fails.
 cat > "$GATES" <<'GATES_EOF'
@@ -139,7 +160,40 @@ GATES_EOF
 out=$(run t1 --accept-abandon G9 2>&1); rc=$?
 [ "$rc" -eq 1 ] || fail "unknown abandon id should exit 1, got $rc"
 grep -q '^G9: abandon-unknown' <<<"$out" || fail "unknown abandon not reported: $out"
-pass "abandon of an unknown gate is refused"
+grep -q 'abandon_unknown=1' "$RESULT" || fail "summary does not explain the verdict: $(tail -1 "$RESULT")"
+pass "abandon of an unknown gate is refused, and the summary says so"
+
+# 8b. A gates.md that exists but declares no parseable gate fails; it is not a pass.
+printf 'gates to be written later\n  - [ ] G1: indented, so not a gate line\n' > "$GATES"
+out=$(run t1 2>&1); rc=$?
+[ "$rc" -eq 1 ] || fail "unparseable gates.md should exit 1, got $rc: $out"
+grep -q '^gates.md: unparseable' <<<"$out" || fail "unparseable file not reported: $out"
+grep -q 'unparseable=1' "$RESULT" || fail "summary does not explain the verdict: $(tail -1 "$RESULT")"
+pass "a gates.md declaring nothing parseable is a failure, not a clean pass"
+
+# 8c. The recorded excerpt carries the line that decided the verdict, and output
+#     that is itself fenced does not break the block.
+cat > "$GATES" <<'GATES_EOF'
+- [ ] G1: the match is buried far below the head of the output
+  CHECK: seq 1 40; printf 'intro\n```\nfenced body\n```\nDECIDER\n'
+  EXPECT: DECIDER
+  EVIDENCE: pending
+GATES_EOF
+run t1 >/dev/null 2>&1; rc=$?
+[ "$rc" -eq 0 ] || fail "buried match should still satisfy the gate, got $rc"
+body=$(awk '/^output:$/ { getline fence; while ((getline l) > 0) { if (l == fence) exit; print l } }' "$RESULT")
+grep -q '^DECIDER$' <<<"$body" || fail "excerpt lacks the deciding line: $body"
+grep -q '^fenced body$' <<<"$body" || fail "excerpt lost context around the match: $body"
+grep -qx '```' <<<"$body" || fail "excerpt dropped the CHECK's own fence: $body"
+grep -q '^1$' <<<"$body" && fail "excerpt is still the head of the output rather than the match"
+pass "the excerpt shows the deciding line in context, whatever the output contains"
+
+# 8d. A CRLF gates.md is read like any other: the pending tick is still refused.
+printf -- '- [x] G1: ticked\r\n  CHECK: cat README.md\r\n  EXPECT: hello\r\n  EVIDENCE: pending\r\n' > "$GATES"
+out=$(run t1 2>&1); rc=$?
+[ "$rc" -eq 1 ] || fail "CRLF gates.md should still refuse the pending hand tick, got $rc: $out"
+grep -q '^G1: unsatisfied.*ticked by hand' <<<"$out" || fail "CRLF hand tick was not refused: $out"
+pass "line endings do not decide a gate"
 
 # 9. No gates.md: explicit no-op, exit 0, no result written.
 mkdir -p "$HOME_DIR/data/t2"
