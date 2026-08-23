@@ -3,7 +3,8 @@
 # a false gate, an abandoned gate, the three hand-ticked shapes (pending, oddly
 # cased pending, no EVIDENCE line at all), a task with no gates.md, a gates.md
 # that declares nothing parseable, a timed-out CHECK through both the timeout(1)
-# and the perl paths, the deciding excerpt, and the no-write guarantees.
+# and the perl paths, the deciding excerpt, output carrying NUL bytes, and the
+# no-write guarantees.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -139,11 +140,21 @@ elapsed=$(( $(date +%s) - start ))
 grep -q 'timed out' <<<"$out" || fail "timeout not reported: $out"
 [ "$elapsed" -lt 4 ] || fail "timeout did not cut the CHECK short (${elapsed}s)"
 
-export FM_CHECK_FORCE_FALLBACK=1
+# Shadow both preferred timers with stubs that exit 0 at once, so only the perl
+# branch can still produce a timeout verdict. Without the knob the stub answers
+# instead and the gate reads "output lacked EXPECT", which is what makes this
+# case discriminating rather than a second copy of the one above.
+FAKEBIN=$(fm_fakebin "$TMP_ROOT")
+fm_fake_exit0 "$FAKEBIN" timeout gtimeout
+out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" "$CHECK" t1 --timeout 1 2>&1); rc=$?
+[ "$rc" -eq 1 ] || fail "stubbed timer should leave the gate unsatisfied, got $rc"
+grep -q 'output lacked EXPECT' <<<"$out" \
+  || fail "the timeout stub is not on PATH, so the fallback case proves nothing: $out"
+
 start=$(date +%s)
-out=$(run t1 --timeout 1 2>&1); rc=$?
+out=$(PATH="$FAKEBIN:$PATH" FM_HOME="$HOME_DIR" FM_CHECK_FORCE_FALLBACK=1 \
+  "$CHECK" t1 --timeout 1 2>&1); rc=$?
 elapsed=$(( $(date +%s) - start ))
-unset FM_CHECK_FORCE_FALLBACK
 [ "$rc" -eq 1 ] || fail "timed-out CHECK on the perl fallback should exit 1, got $rc"
 grep -q 'timed out' <<<"$out" || fail "perl fallback did not report the timeout: $out"
 [ "$elapsed" -lt 4 ] || fail "perl fallback did not cut the CHECK short (${elapsed}s)"
@@ -194,6 +205,19 @@ out=$(run t1 2>&1); rc=$?
 [ "$rc" -eq 1 ] || fail "CRLF gates.md should still refuse the pending hand tick, got $rc: $out"
 grep -q '^G1: unsatisfied.*ticked by hand' <<<"$out" || fail "CRLF hand tick was not refused: $out"
 pass "line endings do not decide a gate"
+
+# 8e. NUL bytes in a CHECK's output do not hide the match nor lose the result file.
+cat > "$GATES" <<'GATES_EOF'
+- [ ] G1: the deciding line sits next to a NUL byte
+  CHECK: printf 'noise\000more noise\nDECIDER\n'
+  EXPECT: DECIDER
+  EVIDENCE: pending
+GATES_EOF
+out=$(run t1 2>&1); rc=$?
+[ "$rc" -eq 0 ] || fail "binary-looking output should still satisfy the gate, got $rc: $out"
+[ -f "$RESULT" ] || fail "binary-looking output cost the run its result file"
+grep -q '^## G1: satisfied' "$RESULT" || fail "result lacks the satisfied verdict: $(cat "$RESULT")"
+pass "a NUL byte in the output decides nothing"
 
 # 9. No gates.md: explicit no-op, exit 0, no result written.
 mkdir -p "$HOME_DIR/data/t2"

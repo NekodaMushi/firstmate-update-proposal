@@ -14,7 +14,8 @@
 # gates.md format (this header is its single owner; docs/configuration.md points here):
 #   - [ ] G1: <expected outcome, one sentence>
 #     CHECK: <shell command run in the task's copy>
-#     EXPECT: <substring the combined stdout+stderr must contain>
+#     EXPECT: <substring the combined stdout+stderr must contain, matched as
+#             text even when the CHECK emits NUL bytes>
 #     EVIDENCE: pending
 #   ABANDON: G3 <reason>
 # A gate is the checkbox line plus its indented CHECK/EVIDENCE/EXPECT lines; gate ids
@@ -74,7 +75,9 @@
 #   --accept-abandon <id>  accept this abandoned gate's reason (repeatable).
 #   --timeout <seconds>    per-CHECK wall clock; default FM_GATES_TIMEOUT or 120.
 #                          Uses timeout(1) or gtimeout(1) when present, else a
-#                          perl fallback; a timed-out CHECK is unsatisfied.
+#                          perl fallback that runs the CHECK in its own process
+#                          group and tears that group down on ALRM, HUP, INT, or
+#                          TERM; a timed-out CHECK is unsatisfied.
 #
 # Environment:
 #   FM_HOME, FM_DATA_OVERRIDE, FM_STATE_OVERRIDE  the usual home overrides.
@@ -166,7 +169,7 @@ run_check() {
   elif [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v gtimeout >/dev/null 2>&1; then
     (cd "$COPY" && gtimeout "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null)
   else
-    (cd "$COPY" && perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } my $stop = sub { kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; waitpid $pid, 0; exit 124 }; local $SIG{ALRM} = $stop; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null)
+    (cd "$COPY" && perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } my $stop = sub { $SIG{HUP} = $SIG{INT} = $SIG{TERM} = "IGNORE"; kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; waitpid $pid, 0; exit 124 }; local $SIG{ALRM} = $stop; local $SIG{HUP} = $stop; local $SIG{INT} = $stop; local $SIG{TERM} = $stop; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null)
   fi
 }
 
@@ -245,7 +248,8 @@ trap 'rm -f "$TMP" ${out:+"$out"}' EXIT
 excerpt() {  # <output-file> [expect]
   local file=$1 expect=${2-} n from to
   if [ -n "$expect" ]; then
-    n=$(grep -nF -m1 -e "$expect" "$file" | cut -d: -f1) || true
+    n=$(grep -anF -m1 -e "$expect" "$file" | cut -d: -f1) || true
+    case "$n" in ''|*[!0-9]*) n= ;; esac
     if [ -n "$n" ]; then
       from=$((n - OUTPUT_CONTEXT))
       [ "$from" -ge 1 ] || from=1
@@ -326,7 +330,7 @@ for i in "${!GATE_IDS[@]}"; do
     emit "$gid" unsatisfied "CHECK timed out after ${TIMEOUT}s" "$out"
     rm -f "$out"; out=; continue
   fi
-  if grep -qF -e "$expect" "$out"; then
+  if grep -qaF -e "$expect" "$out"; then
     if [ "$box" != " " ] && evidence_is_pending "$evidence"; then
       n_unsat=$((n_unsat + 1))
       emit "$gid" unsatisfied "box ticked by hand while EVIDENCE is still pending; the tick is an unbacked claim (CHECK output did contain EXPECT, exit $rc)" "$out" "$expect"
