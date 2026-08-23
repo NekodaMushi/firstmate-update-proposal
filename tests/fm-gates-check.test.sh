@@ -221,75 +221,55 @@ grep -q '^## G1: satisfied' "$RESULT" || fail "result lacks the satisfied verdic
 [ ! -s "$TMP_ROOT/nul.err" ] || fail "NUL output left noise on stderr: $(cat "$TMP_ROOT/nul.err")"
 pass "a NUL byte in the output decides nothing and says nothing"
 
-# 8f. A mis-indented bullet closes the gate above it: the fields that follow are
-#     reported, not adopted by a gate that never declared them. G1 owns no EXPECT,
-#     and the stray bullet's EXPECT would make G1's own output read as a match.
-cat > "$GATES" <<'GATES_EOF'
-- [ ] G1: keeps only what it declares
-  CHECK: echo ok-from-the-wrong-gate
-  EVIDENCE: pending
- - [ ] G2: one leading space, so not a gate line
-  CHECK: echo ok
-  EXPECT: ok
-  EVIDENCE: pending
-GATES_EOF
-out=$(run t1 2>&1); rc=$?
-[ "$rc" -eq 1 ] || fail "a malformed gate line should exit 1, got $rc: $out"
-grep -q '^G1: unsatisfied.*no EXPECT line' <<<"$out" || fail "G1 adopted the stray bullet's EXPECT: $out"
-grep -q '^gates.md:4: parse-error' <<<"$out" || fail "the mis-indented bullet was not reported: $out"
-grep -q '^gates.md:5: parse-error - CHECK line belongs to no gate' <<<"$out" \
-  || fail "the orphaned CHECK still landed on the gate above: $out"
-grep -q '^## G2' "$RESULT" && fail "a line that is not a gate line became a gate"
-grep -q 'parse_errors=4' "$RESULT" || fail "summary does not explain the verdict: $(tail -1 "$RESULT")"
-pass "a mis-indented bullet closes the gate above it instead of feeding it"
-
-# 8f2. The other checkbox slips are refused the same way.
-cat > "$GATES" <<'GATES_EOF'
-- [ ]G1: no space after the box
-- [ ]	G2: a tab after the box
-- [ ] G3: the one real gate
-  CHECK: cat README.md
-  EXPECT: hello
-  EVIDENCE: pending
-GATES_EOF
-out=$(run t1 2>&1); rc=$?
-[ "$rc" -eq 1 ] || fail "checkbox slips should exit 1, got $rc: $out"
-grep -q '^gates.md:1: parse-error' <<<"$out" || fail "a missing space after the box was not reported: $out"
-grep -q '^gates.md:2: parse-error' <<<"$out" || fail "a tab after the box was not reported: $out"
-grep -q '^G3: satisfied' <<<"$out" || fail "the real gate stopped being checked: $out"
-pass "every checkbox slip is reported, and the gates around it still run"
-
-# 8g. Prose that is not trying to be a gate is still ignored.
-cat > "$GATES" <<'GATES_EOF'
-- [firstmate#2](https://example.invalid/issues/2)
-- context for the reviewer
-- [ ] G1: the only gate
-  CHECK: cat README.md
-  EXPECT: hello
-  EVIDENCE: pending
-GATES_EOF
-out=$(run t1 2>&1); rc=$?
-[ "$rc" -eq 0 ] || fail "a link bullet should not fail the run, got $rc: $out"
-grep -q 'parse_errors=0' "$RESULT" || fail "prose was read as a malformed gate: $(tail -1 "$RESULT")"
-pass "a link bullet is prose, not a broken gate"
-
-# 8h. An ABANDON that misses its shape is reported rather than quietly doing nothing.
-cat > "$GATES" <<'GATES_EOF'
-- [ ] G1: the gate someone meant to withdraw
-  CHECK: cat README.md
-  EXPECT: hello
-  EVIDENCE: pending
-ABANDON:G1 no space after the colon
- ABANDON: G1 indented, so not an abandon line
-GATES_EOF
-printf 'ABANDON:   \n' >> "$GATES"
-out=$(run t1 2>&1); rc=$?
-[ "$rc" -eq 1 ] || fail "a malformed ABANDON should exit 1, got $rc: $out"
-grep -q '^gates.md:5: parse-error' <<<"$out" || fail "ABANDON without the space was not reported: $out"
-grep -q '^gates.md:6: parse-error' <<<"$out" || fail "an indented ABANDON was not reported: $out"
-grep -q '^gates.md:7: parse-error' <<<"$out" || fail "an ABANDON naming no gate was not reported: $out"
-grep -q 'parse_errors=3' "$RESULT" || fail "summary does not explain the verdict: $(tail -1 "$RESULT")"
-pass "a withdrawal that misses its shape fails loudly instead of silently"
+# 8f. The grammar is deny-by-default: a line matches one of the three shapes, is
+#     context, or is a parse error naming its own line number. Each row below is
+#     description|gates.md body|expected parse-error lines|expected exit code.
+#     Every body carries the same reference gate, so each row also proves the slip
+#     did not change the verdict of the gate beside it.
+REF='- [ ] G1: the reference gate\n  CHECK: cat README.md\n  EXPECT: hello\n  EVIDENCE: pending'
+rows=0
+while IFS='|' read -r desc body errs want_rc; do
+  case "$desc" in ''|'#'*) continue ;; esac
+  rows=$((rows + 1))
+  printf '%b\n' "$body" > "$GATES"
+  out=$(run t1 2>&1 </dev/null); rc=$?
+  [ "$rc" -eq "$want_rc" ] || fail "$desc: expected exit $want_rc, got $rc: $out"
+  n=0
+  for e in $errs; do
+    n=$((n + 1))
+    grep -q "^gates.md:$e: parse-error" <<<"$out" || fail "$desc: line $e was not reported: $out"
+  done
+  grep -q " parse_errors=$n exit=$want_rc\$" "$RESULT" \
+    || fail "$desc: summary does not match the verdict: $(tail -1 "$RESULT")"
+  grep -q '^G1: satisfied' <<<"$out" || fail "$desc: the reference gate lost its own verdict: $out"
+done <<TABLE
+a file of nothing but valid shapes|$REF||0
+a link bullet is context|- [firstmate#2](https://example.invalid/issues/2)\n$REF||0
+a heading and prose are context|# Gates for t1\ncontext for the reviewer\n$REF||0
+an asterisk bullet|$REF\n* [ ] G2: an asterisk bullet|5|1
+no space after the dash|$REF\n-[ ] G2: x|5|1
+two spaces before the box|$REF\n-  [ ] G2: x|5|1
+a space inside the box|$REF\n- [ x] G2: x|5|1
+no space after the box|$REF\n- [ ]G2: x|5|1
+a box with no bullet|$REF\n[x] G2: x|5|1
+an indented gate line|$REF\n - [ ] G2: x|5|1
+a gate with no id|$REF\n- [ ] : an outcome with no id|5|1
+a gate id carrying whitespace|$REF\n- [ ] G 2: x|5|1
+a gate line with no colon|$REF\n- [ ] G2 no colon here|5|1
+a gate id declared twice|$REF\n- [ ] G1: declared a second time|5|1
+a field given twice|$REF\n  CHECK: echo twice|5|1
+a field with no value|- [ ] G1: the reference gate\n  CHECK: cat README.md\n  EXPECT: hello\n  EVIDENCE:   |4|1
+a field with no space after the colon|$REF\n  CHECK:echo x|5|1
+an unindented field|$REF\nCHECK: echo x|5|1
+a field before any gate|  CHECK: echo x\n$REF|1|1
+a field after a rejected gate line|$REF\n* [ ] G2: x\n  CHECK: echo x|5 6|1
+an abandon with no space after the colon|$REF\nABANDON:G1 no space|5|1
+an indented abandon|$REF\n ABANDON: G1 indented|5|1
+an abandon with no reason|$REF\nABANDON: G1|5|1
+an abandon with no id|$REF\nABANDON:   |5|1
+TABLE
+[ "$rows" -eq 24 ] || fail "the grammar table ran $rows rows, not 24"
+pass "the grammar takes its three shapes, ignores context, and reports every slip"
 
 # 8i. Padding after the checkbox does not change the gate id an ABANDON must name.
 cat > "$GATES" <<'GATES_EOF'

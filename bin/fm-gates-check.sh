@@ -11,28 +11,37 @@
 # so the checker can be re-run as often as needed and a CHECK that edits the copy
 # is the CHECK's problem, never the checker's.
 #
-# gates.md format (this header is its single owner; docs/configuration.md points here):
+# gates.md, by example (this header is the single owner of the grammar below, and
+# docs/configuration.md points here):
 #   - [ ] G1: <expected outcome, one sentence>
 #     CHECK: <shell command run in the task's copy>
-#     EXPECT: <substring the combined stdout+stderr must contain, matched as
-#             text even when the CHECK emits NUL bytes>
+#     EXPECT: <substring the combined stdout+stderr must contain>
 #     EVIDENCE: pending
 #   ABANDON: G3 <reason>
-# A gate is the checkbox line plus its indented CHECK/EVIDENCE/EXPECT lines; gate ids
-# are free-form tokens before the colon (G1, G2a, ...). Every other line is ignored.
-# The shape is strict, because a human edits this file and a slip must not decide a
-# gate quietly: a checkbox line sits at column 0, and each CHECK/EXPECT/EVIDENCE line
-# is indented under it, carries a space after the colon, and appears at most once.
-# A checkbox-shaped line ("- []" or "- [" plus one character plus "]") that is not a
-# gate line, a line starting with ABANDON that is not an abandon line, and a
-# CHECK/EXPECT/EVIDENCE line that is unindented, belongs to no gate, repeats one
-# already given, or lacks the space, are each reported as a parse-error naming the
-# line number, and none of them changes a gate.
-# A rejected checkbox line also closes the gate above it, so the fields that follow
-# are reported rather than adopted by a gate they were never written for.
-# An ordinary bullet, a Markdown link bullet, and any other prose stay ignored: only
-# a line that is trying to be part of the format is held to it.
-# ABANDON lines stand on their own line, anywhere in the file, and name a gate id.
+#
+# The grammar is deny-by-default, because a human edits this file and one slipped
+# character must not decide a gate quietly. A line either matches one of the three
+# shapes below, is context, or is a parse-error naming its line number; nothing is
+# dropped in silence and nothing lands on a gate that did not declare it.
+#   gate     at column 0, "- [ ] <id>: <outcome>" or "- [x] <id>: <outcome>" ("X"
+#            counts as ticked). <id> is non-empty, carries no whitespace, and is
+#            declared once in the file.
+#   field    indented by at least one space or tab under its gate, one of
+#            "CHECK: <value>", "EXPECT: <value>", "EVIDENCE: <value>". Each value is
+#            non-empty and each key appears at most once per gate. EXPECT is matched
+#            as text, so a CHECK that emits NUL bytes still decides its gate.
+#   abandon  at column 0, "ABANDON: <id> <reason>", both parts non-empty, anywhere in
+#            the file. An id naming no gate is reported as abandon-unknown.
+#   context  ignored: blank lines, lines whose first non-blank character is "#", and
+#            every line that is not trying to be one of the three shapes.
+# A line is held to the gate shape when its trimmed form opens a box within its first
+# four characters, meaning a "[" whose content up to the "]" is only spaces, tabs, x,
+# or X. So "* [ ] G2", "-[ ] G2", "- [ x] G2" and "- [ ]G2:" are errors, while the
+# Markdown link bullet "- [issue#2](url)" and ordinary prose stay context.
+# A line whose trimmed form starts with ABANDON, CHECK:, EXPECT:, or EVIDENCE: is held
+# to that shape for the same reason.
+# A rejected gate line closes the gate above it, so the fields that follow are reported
+# as belonging to no gate rather than adopted by a gate that never declared them.
 # EVIDENCE: pending is the literal the intake writes, compared ignoring case and
 # surrounding whitespace; a gate with no EVIDENCE line at all counts as pending
 # too, since a missing line backs a tick even less than a pending one.
@@ -56,9 +65,9 @@
 #   unparseable a gates.md that exists but declares no gate line at all. Reported
 #               once against the file rather than a gate: nothing could be
 #               checked, and a malformed intake file must not read as a pass.
-#   parse-error a line that looks like part of the format but does not match it.
-#               Reported against gates.md:<line>, never against a gate, and the
-#               line is discarded rather than applied to the nearest gate.
+#   parse-error a line that is trying to be part of the format and does not match
+#               the grammar above. Reported against gates.md:<line>, never against
+#               a gate, and discarded rather than applied to the nearest gate.
 #
 # gates-result.md layout (this header is its single owner):
 #   # Gates result for <id>
@@ -196,6 +205,9 @@ GATE_BOXES=()
 GATE_CHECKS=()
 GATE_EXPECTS=()
 GATE_EVIDENCES=()
+GATE_HAS_CHECK=()
+GATE_HAS_EXPECT=()
+GATE_HAS_EVIDENCE=()
 ABANDON_IDS=()
 ABANDON_REASONS=()
 PARSE_ERROR_LINES=()
@@ -208,21 +220,97 @@ parse_error() {
   PARSE_ERROR_MSGS+=("$2")
 }
 
+gate_index() {
+  local id=$1 i
+  for i in "${!GATE_IDS[@]}"; do
+    [ "${GATE_IDS[$i]}" = "$id" ] && { echo "$i"; return 0; }
+  done
+  return 1
+}
+
+# True when the line opens a box early enough to be a gate line trying its luck:
+# a "[" within the first four characters whose content up to the "]" is only
+# spaces, tabs, x, or X. A Markdown link bullet fails on that content and stays
+# context, which is the whole difference between a slipped gate and prose.
+opens_a_box() {
+  local s=$1 rest inside
+  case "${s:0:4}" in
+    *\[*) ;;
+    *) return 1 ;;
+  esac
+  rest=${s#*\[}
+  case "$rest" in
+    *\]*) ;;
+    *) return 1 ;;
+  esac
+  inside=${rest%%\]*}
+  case "$inside" in
+    *[![:space:]xX]*) return 1 ;;
+  esac
+  return 0
+}
+
 while IFS= read -r line || [ -n "$line" ]; do
   lineno=$((lineno + 1))
   line=${line%$'\r'}
-  case "$line" in
-    -\ \[\ \]\ *:*|-\ \[[xX]\]\ *:*)
-      box=${line:3:1}
-      rest=${line#- \[?\] }
-      rest=${rest#"${rest%%[![:space:]]*}"}
-      gid=${rest%%:*}
-      gid=${gid%"${gid##*[![:space:]]}"}
-      GATE_IDS+=("$gid"); GATE_BOXES+=("$box")
-      GATE_CHECKS+=(""); GATE_EXPECTS+=(""); GATE_EVIDENCES+=("")
-      cur=$(( ${#GATE_IDS[@]} - 1 ))
-      ;;
-    ABANDON:\ *)
+  trimmed=${line#"${line%%[![:space:]]*}"}
+  [ -n "$trimmed" ] || continue
+  case "$trimmed" in '#'*) continue ;; esac
+
+  if opens_a_box "$trimmed"; then
+    if [ "$trimmed" != "$line" ]; then
+      parse_error "$lineno" "gate line is indented; a gate line sits at column 0"
+      cur=-1; continue
+    fi
+    case "$line" in
+      -\ \[\ \]\ ?*|-\ \[[xX]\]\ ?*) ;;
+      *)
+        parse_error "$lineno" "gate line does not match '- [ ] <id>: <outcome>'"
+        cur=-1; continue ;;
+    esac
+    box=${line:3:1}
+    rest=${line#- \[?\] }
+    rest=${rest#"${rest%%[![:space:]]*}"}
+    case "$rest" in
+      *:*) ;;
+      *)
+        parse_error "$lineno" "gate line has no ':' after its id"
+        cur=-1; continue ;;
+    esac
+    gid=${rest%%:*}
+    gid=${gid%"${gid##*[![:space:]]}"}
+    if [ -z "$gid" ]; then
+      parse_error "$lineno" "gate line names no id"
+      cur=-1; continue
+    fi
+    case "$gid" in
+      *[[:space:]]*)
+        parse_error "$lineno" "gate id '$gid' carries whitespace"
+        cur=-1; continue ;;
+    esac
+    if gate_index "$gid" >/dev/null; then
+      parse_error "$lineno" "gate id '$gid' is already declared"
+      cur=-1; continue
+    fi
+    GATE_IDS+=("$gid"); GATE_BOXES+=("$box")
+    GATE_CHECKS+=(""); GATE_EXPECTS+=(""); GATE_EVIDENCES+=("")
+    GATE_HAS_CHECK+=(0); GATE_HAS_EXPECT+=(0); GATE_HAS_EVIDENCE+=(0)
+    cur=$(( ${#GATE_IDS[@]} - 1 ))
+    continue
+  fi
+
+  case "$trimmed" in
+    ABANDON*)
+      if [ "$trimmed" != "$line" ]; then
+        parse_error "$lineno" "ABANDON line is indented; it sits at column 0"
+        continue
+      fi
+      case "$line" in
+        ABANDON:\ *) ;;
+        *)
+          parse_error "$lineno" "ABANDON line does not match 'ABANDON: <gate-id> <reason>'"
+          continue ;;
+      esac
       rest=${line#ABANDON: }
       rest=${rest#"${rest%%[![:space:]]*}"}
       aid=${rest%%[[:space:]]*}
@@ -232,47 +320,47 @@ while IFS= read -r line || [ -n "$line" ]; do
       fi
       reason=${rest#"$aid"}
       reason=${reason#"${reason%%[![:space:]]*}"}
+      reason=${reason%"${reason##*[![:space:]]}"}
+      if [ -z "$reason" ]; then
+        parse_error "$lineno" "ABANDON of $aid gives no reason"
+        continue
+      fi
       ABANDON_IDS+=("$aid"); ABANDON_REASONS+=("$reason")
-      ;;
+      continue ;;
+    CHECK:*|EXPECT:*|EVIDENCE:*) ;;
+    *) continue ;;
+  esac
+
+  key=${trimmed%%:*}
+  if [ "$trimmed" = "$line" ]; then
+    parse_error "$lineno" "$key line is not indented under a gate"
+    continue
+  fi
+  case "$trimmed" in
+    "$key: "?*) ;;
     *)
-      trimmed=${line#"${line%%[![:space:]]*}"}
-      case "$trimmed" in
-        -\ \[\]*|-\ \[?\]*)
-          parse_error "$lineno" "checkbox line does not match '- [ ] <id>: <outcome>' at column 0"
-          cur=-1
-          continue ;;
-        ABANDON*)
-          parse_error "$lineno" "ABANDON line does not match 'ABANDON: <gate-id> <reason>' at column 0"
-          continue ;;
-        CHECK:|CHECK:\ *|EXPECT:|EXPECT:\ *|EVIDENCE:|EVIDENCE:\ *) ;;
-        CHECK:*|EXPECT:*|EVIDENCE:*)
-          parse_error "$lineno" "${trimmed%%:*} line needs a space after the colon"
-          continue ;;
-        *) continue ;;
-      esac
-      key=${trimmed%%:*}
-      value=${trimmed#"$key":}
-      value=${value# }
-      if [ "$cur" -lt 0 ]; then
-        parse_error "$lineno" "$key line belongs to no gate"
-        continue
-      fi
-      if [ "$trimmed" = "$line" ]; then
-        parse_error "$lineno" "$key line is not indented under a gate"
-        continue
-      fi
-      case "$key" in
-        CHECK)
-          [ -z "${GATE_CHECKS[cur]}" ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has a CHECK"; continue; }
-          GATE_CHECKS[cur]=$value ;;
-        EXPECT)
-          [ -z "${GATE_EXPECTS[cur]}" ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has an EXPECT"; continue; }
-          GATE_EXPECTS[cur]=$value ;;
-        EVIDENCE)
-          [ -z "${GATE_EVIDENCES[cur]}" ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has an EVIDENCE"; continue; }
-          GATE_EVIDENCES[cur]=$value ;;
-      esac
-      ;;
+      parse_error "$lineno" "$key line does not match '$key: <value>'"
+      continue ;;
+  esac
+  value=${trimmed#"$key": }
+  if [ -z "${value#"${value%%[![:space:]]*}"}" ]; then
+    parse_error "$lineno" "$key line carries no value"
+    continue
+  fi
+  if [ "$cur" -lt 0 ]; then
+    parse_error "$lineno" "$key line belongs to no gate"
+    continue
+  fi
+  case "$key" in
+    CHECK)
+      [ "${GATE_HAS_CHECK[cur]}" -eq 0 ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has a CHECK"; continue; }
+      GATE_CHECKS[cur]=$value; GATE_HAS_CHECK[cur]=1 ;;
+    EXPECT)
+      [ "${GATE_HAS_EXPECT[cur]}" -eq 0 ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has an EXPECT"; continue; }
+      GATE_EXPECTS[cur]=$value; GATE_HAS_EXPECT[cur]=1 ;;
+    EVIDENCE)
+      [ "${GATE_HAS_EVIDENCE[cur]}" -eq 0 ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has an EVIDENCE"; continue; }
+      GATE_EVIDENCES[cur]=$value; GATE_HAS_EVIDENCE[cur]=1 ;;
   esac
 done < "$GATES"
 
@@ -379,10 +467,10 @@ for i in "${!GATE_IDS[@]}"; do
     fi
     continue
   fi
-  if [ -z "$check" ]; then
+  if [ "${GATE_HAS_CHECK[$i]}" -eq 0 ]; then
     n_unsat=$((n_unsat + 1)); emit "$gid" unsatisfied "no CHECK line; an unrunnable gate is unmet"; continue
   fi
-  if [ -z "$expect" ]; then
+  if [ "${GATE_HAS_EXPECT[$i]}" -eq 0 ]; then
     n_unsat=$((n_unsat + 1)); emit "$gid" unsatisfied "no EXPECT line; nothing to compare the output against"; continue
   fi
 
