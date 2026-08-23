@@ -10,15 +10,17 @@
 #
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
 # DATA plane: conversational text for the agent to read, always routing-marked
-# for a kind=secondmate target so the reply returns through the status path.
-# That marking is right for a message and wrong for a lifecycle command - a
-# marked "/quit" arrives as ordinary chat the agent reasons ABOUT instead of
+# for a kind=secondmate task selector so the reply returns through the status
+# path. That marking is right for a message and wrong for a lifecycle command -
+# a marked "/quit" arrives as ordinary chat the agent reasons ABOUT instead of
 # executing. This script is the control plane: semantic process control with a
 # closed verb list, per-harness mechanics owned by an executable adapter
 # (bin/fm-control-lib.sh) rather than improvised in agent prose, and a verified
-# postcondition for every action. There is deliberately NO arbitrary-text and
-# NO generic raw-key entry point here; fm-send remains the only way to send an
-# agent something to read.
+# postcondition for every action. The exit verb uses fm-send's verified submit
+# transport against the exact recorded endpoint rather than a task selector, so
+# the lifecycle command remains unmarked while submission has one owner. There
+# is deliberately NO arbitrary-text and NO generic raw-key entry point here;
+# fm-send remains the only way to send an agent something to read.
 #
 #   interrupt  Deliver the harness's verified interrupt sequence. The agent
 #              keeps running. Postcondition: delivery succeeded, the endpoint
@@ -330,6 +332,30 @@ wait_agent_state() {  # <timeout> <wanted>...
   return 1
 }
 
+# wait_bare_shell proves both halves of the relaunch handoff: the recovery-grade
+# classifier sees no agent process, and the endpoint renders non-empty shell
+# output where its prompt is visible. A dead process verdict without a readable
+# pane is not enough to launch a replacement.
+wait_bare_shell() {  # <timeout>
+  local timeout=$1 state screen elapsed=0
+  while :; do
+    state=$(agent_state)
+    if [ "$state" = dead ]; then
+      screen=$(fm_backend_capture "$BACKEND" "$T" 20 "$LABEL" 2>/dev/null || true)
+      if printf '%s\n' "$screen" | grep -q '[^[:space:]]'; then
+        printf '%s' dead
+        return 0
+      fi
+      state=dead-prompt-unreadable
+    fi
+    awk -v e="$elapsed" -v t="$timeout" 'BEGIN{exit !(e < t)}' || break
+    sleep "$POLL"
+    elapsed=$(awk -v e="$elapsed" -v p="$POLL" 'BEGIN{printf "%.3f", e + p}')
+  done
+  printf '%s' "$state"
+  return 1
+}
+
 require_state_verified_backend() {  # <verb>
   fm_control_backend_state_verified "$BACKEND" && return 0
   die "task $ID runs on the $BACKEND backend, which has no recovery-grade agent-state classifier, so '$1' cannot prove the agent actually stopped; refusing rather than reporting an unproven transition as done"
@@ -433,7 +459,7 @@ retire_busy_incarnation() {
 # do_exit: stop the running agent, preserving endpoint and worktree. Prints
 # `already-stopped` or `stopped`.
 do_exit() {
-  local state cmd verdict cancel interrupt_result=not-needed
+  local state cmd send_rc cancel interrupt_result=not-needed
   require_state_verified_backend exit
   state=$(agent_state)
   case "$state" in
@@ -463,16 +489,20 @@ do_exit() {
       ;;
   esac
   cmd=$(fm_control_exit_command "$HARNESS")
-  # The submit verdict is NOT the postcondition here: a successful exit command
-  # destroys the composer the verdict is read from, so a post-exit read can
-  # legitimately report anything. Only a hard transport failure aborts; the
-  # authoritative proof is the agent-state wait below. The retried Enter still
-  # matters, because a slash command opens a completion popup on some TUIs that
-  # swallows the first Enter.
-  verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL") \
-    || die "the exit command could not be sent to task $ID on $BACKEND"
-  [ "$verdict" != send-failed ] \
-    || die "the exit command could not be sent to task $ID on $BACKEND"
+  # fm-send owns verified text submission, including the retried Enter needed
+  # when a slash-command popup swallows the first one. Addressing the exact
+  # recorded endpoint, rather than the task selector, deliberately avoids the
+  # secondmate conversational marker. Submission is not the postcondition: a
+  # successful exit destroys the composer used for read-back, so an
+  # exit-3 delivered-but-unconfirmed result still proceeds to the authoritative
+  # bounded agent-state proof below.
+  send_rc=0
+  FM_SEND_RETRIES="$EXIT_RETRIES" FM_SEND_SLEEP="$POLL" FM_SEND_SETTLE=0 \
+    "$SCRIPT_DIR/fm-send.sh" "$T" "$cmd" || send_rc=$?
+  case "$send_rc" in
+    0|3) ;;
+    *) die "the exit command could not be sent to task $ID on $BACKEND" ;;
+  esac
   state=$(wait_agent_state "$EXIT_WAIT" dead) || {
     die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
   }
@@ -805,7 +835,10 @@ do_relaunch() {
 
   journal_write stopping "${CHECKPOINT_LINES[@]}" "$note_line"
   exit_result=$(do_exit)
-  journal_write exited "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result"
+  state=$(wait_bare_shell "$EXIT_WAIT") || {
+    die "task $ID's old agent stopped, but its endpoint did not become a verifiable bare shell with a visible prompt within ${EXIT_WAIT}s (state: $state); refusing to launch a replacement"
+  }
+  journal_write exited "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result" "shell_ready=$state"
 
   # The launch owner (fm-spawn --relaunch) clears the previous incarnation's
   # per-task harness wiring before arming the new one, so nothing to do here.
