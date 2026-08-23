@@ -96,7 +96,8 @@
 #            Markdown cannot close the block early.>
 #   ## Summary
 #   satisfied=<n> unsatisfied=<n> abandoned=<n> accepted=<n> abandon_unknown=<n> unparseable=<n> parse_errors=<n> exit=<code>
-# The file is replaced atomically on each run; the previous run is not kept.
+# The file is replaced atomically on each run at mode 0600, like the other private
+# records under the operational home; the previous run is not kept.
 #
 # Exit codes:
 #   0 every gate satisfied, and every abandoned gate accepted on this command line.
