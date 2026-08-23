@@ -301,8 +301,11 @@ a plain prose note|note: G2 was moved to a follow-up|5
 a heading|## G2 notes|5
 an abandon of another gate|ABANDON: G9 dropped elsewhere|5
 a rejected gate line|* [ ] G2: an asterisk bullet|4 5
+an unindented field|CHECK: stray at column zero|4 5
+an indented field missing its space|  EXPECT:nope|4 5
+an indented field with no value|  EXPECT:   |4 5
 TABLE
-[ "$rows" -eq 7 ] || fail "the adoption table ran $rows rows, not 7"
+[ "$rows" -eq 10 ] || fail "the adoption table ran $rows rows, not 10"
 pass "a stray line closes the gate above it instead of feeding it"
 
 # 8i. Padding after the checkbox does not change the gate id an ABANDON must name.

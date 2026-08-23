@@ -27,20 +27,21 @@
 #            counts as ticked). <id> is non-empty, carries no whitespace, and is
 #            declared once in the file.
 #   field    indented by at least one space or tab, following its gate line with
-#            nothing but blank lines and its sibling fields in between, one of
+#            nothing but blank lines and accepted sibling fields in between, one of
 #            "CHECK: <value>", "EXPECT: <value>", "EVIDENCE: <value>". Each value is
 #            non-empty and each key appears at most once per gate. EXPECT is matched
 #            as text, so a CHECK that emits NUL bytes still decides its gate.
 #   abandon  at column 0, "ABANDON: <id> <reason>", both parts non-empty, anywhere in
 #            the file. An id naming no gate is reported as abandon-unknown.
-#   context  ignored as content, but not free-floating. A blank line closes nothing.
-#            Every other line that is neither a gate line nor one of its fields - a
-#            heading, prose, a link bullet, a table row, an abandon, a rejected gate
-#            line - closes the gate above it, so a field that follows belongs to no
-#            gate and is reported with its line number instead of being adopted by a
-#            gate that never declared it. That is the whole rule: the checker cannot
-#            recognise every shape a human might write, so it only ever attaches a
-#            field to the gate it visibly sits under.
+#   context  ignored as content, but not free-floating. A gate stays open only while
+#            what follows it is blank lines and accepted field lines; every other
+#            non-blank line closes it, whether that is a heading, prose, a link
+#            bullet, a table row, an abandon, a rejected gate line or a rejected
+#            field line. A field after such a line belongs to no gate and is
+#            reported with its line number instead of being adopted by a gate that
+#            never declared it. The checker cannot recognise every shape a human
+#            might write, so that one rule, rather than a list of shapes, is what
+#            keeps every verdict tied to the gate that earned it.
 # A line is held to the gate shape when its trimmed form opens a box within its first
 # four characters, meaning a "[" whose content up to the "]" is only spaces, tabs, x,
 # or X. So "* [ ] G2", "-[ ] G2", "- [ x] G2" and "- [ ]G2:" are errors, while the
@@ -339,18 +340,18 @@ while IFS= read -r line || [ -n "$line" ]; do
   key=${trimmed%%:*}
   if [ "$trimmed" = "$line" ]; then
     parse_error "$lineno" "$key line is not indented under a gate"
-    continue
+    cur=-1; continue
   fi
   case "$trimmed" in
     "$key: "?*) ;;
     *)
       parse_error "$lineno" "$key line does not match '$key: <value>'"
-      continue ;;
+      cur=-1; continue ;;
   esac
   value=${trimmed#"$key": }
   if [ -z "${value#"${value%%[![:space:]]*}"}" ]; then
     parse_error "$lineno" "$key line carries no value"
-    continue
+    cur=-1; continue
   fi
   if [ "$cur" -lt 0 ]; then
     parse_error "$lineno" "$key line belongs to no gate"
@@ -358,13 +359,13 @@ while IFS= read -r line || [ -n "$line" ]; do
   fi
   case "$key" in
     CHECK)
-      [ "${GATE_HAS_CHECK[cur]}" -eq 0 ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has a CHECK"; continue; }
+      [ "${GATE_HAS_CHECK[cur]}" -eq 0 ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has a CHECK"; cur=-1; continue; }
       GATE_CHECKS[cur]=$value; GATE_HAS_CHECK[cur]=1 ;;
     EXPECT)
-      [ "${GATE_HAS_EXPECT[cur]}" -eq 0 ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has an EXPECT"; continue; }
+      [ "${GATE_HAS_EXPECT[cur]}" -eq 0 ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has an EXPECT"; cur=-1; continue; }
       GATE_EXPECTS[cur]=$value; GATE_HAS_EXPECT[cur]=1 ;;
     EVIDENCE)
-      [ "${GATE_HAS_EVIDENCE[cur]}" -eq 0 ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has an EVIDENCE"; continue; }
+      [ "${GATE_HAS_EVIDENCE[cur]}" -eq 0 ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has an EVIDENCE"; cur=-1; continue; }
       GATE_EVIDENCES[cur]=$value; GATE_HAS_EVIDENCE[cur]=1 ;;
   esac
 done < "$GATES"
