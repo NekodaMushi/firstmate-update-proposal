@@ -3,8 +3,8 @@
 # a false gate, an abandoned gate, the three hand-ticked shapes (pending, oddly
 # cased pending, no EVIDENCE line at all), a task with no gates.md, a gates.md
 # that declares nothing parseable, a timed-out CHECK through both the timeout(1)
-# and the perl paths, the deciding excerpt, output carrying NUL bytes, and the
-# no-write guarantees.
+# and the perl paths, the deciding excerpt, output carrying NUL bytes, the parse
+# errors a hand-edited file can carry, and the no-write guarantees.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -75,7 +75,7 @@ grep -q '^## G2: unsatisfied' "$RESULT" || fail "result lacks G2 section"
 grep -q '^## G3: abandoned' "$RESULT" || fail "result lacks G3 section"
 grep -q '^## G4: unsatisfied' "$RESULT" || fail "result lacks G4 section"
 grep -q 'upstream removed the feature' "$RESULT" || fail "abandon reason not recorded"
-grep -q '^satisfied=1 unsatisfied=4 abandoned=1 accepted=0 abandon_unknown=0 unparseable=0 exit=1$' "$RESULT" \
+grep -q '^satisfied=1 unsatisfied=4 abandoned=1 accepted=0 abandon_unknown=0 unparseable=0 parse_errors=0 exit=1$' "$RESULT" \
   || fail "summary wrong: $(tail -1 "$RESULT")"
 awk '/^## G2/,/^## G3/' "$RESULT" | grep -q '^hello$' || fail "deciding output excerpt missing for G2"
 pass "gates-result.md carries head, timestamp, excerpts, and summary"
@@ -111,7 +111,7 @@ run t1 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 1 ] || fail "unaccepted abandon should keep exit non-zero, got $rc"
 run t1 --accept-abandon G2 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 0 ] || fail "all satisfied plus accepted abandon should exit 0, got $rc"
-grep -q '^satisfied=1 unsatisfied=0 abandoned=1 accepted=1 abandon_unknown=0 unparseable=0 exit=0$' "$RESULT" \
+grep -q '^satisfied=1 unsatisfied=0 abandoned=1 accepted=1 abandon_unknown=0 unparseable=0 parse_errors=0 exit=0$' "$RESULT" \
   || fail "summary wrong after accept"
 pass "exit code is zero only once every abandon is accepted"
 
@@ -175,7 +175,7 @@ grep -q 'abandon_unknown=1' "$RESULT" || fail "summary does not explain the verd
 pass "abandon of an unknown gate is refused, and the summary says so"
 
 # 8b. A gates.md that exists but declares no parseable gate fails; it is not a pass.
-printf 'gates to be written later\n  - [ ] G1: indented, so not a gate line\n' > "$GATES"
+printf 'gates to be written later\nnothing declared yet\n' > "$GATES"
 out=$(run t1 2>&1); rc=$?
 [ "$rc" -eq 1 ] || fail "unparseable gates.md should exit 1, got $rc: $out"
 grep -q '^gates.md: unparseable' <<<"$out" || fail "unparseable file not reported: $out"
@@ -213,11 +213,46 @@ cat > "$GATES" <<'GATES_EOF'
   EXPECT: DECIDER
   EVIDENCE: pending
 GATES_EOF
-out=$(run t1 2>&1); rc=$?
+out=$(run t1 2> "$TMP_ROOT/nul.err"); rc=$?
 [ "$rc" -eq 0 ] || fail "binary-looking output should still satisfy the gate, got $rc: $out"
 [ -f "$RESULT" ] || fail "binary-looking output cost the run its result file"
 grep -q '^## G1: satisfied' "$RESULT" || fail "result lacks the satisfied verdict: $(cat "$RESULT")"
-pass "a NUL byte in the output decides nothing"
+[ ! -s "$TMP_ROOT/nul.err" ] || fail "NUL output left noise on stderr: $(cat "$TMP_ROOT/nul.err")"
+pass "a NUL byte in the output decides nothing and says nothing"
+
+# 8f. A mis-indented bullet is a parse error, not a silent donation of its CHECK
+#     to the gate above it.
+cat > "$GATES" <<'GATES_EOF'
+- [ ] G1: the gate that must keep its own CHECK
+  CHECK: printf 'REAL\n'
+  EXPECT: REAL
+  EVIDENCE: pending
+ - [ ] G2: one leading space, so not a gate line
+  CHECK: printf 'FAKE\n'
+  EXPECT: FAKE
+  EVIDENCE: pending
+GATES_EOF
+out=$(run t1 2>&1); rc=$?
+[ "$rc" -eq 1 ] || fail "a malformed gate line should exit 1, got $rc: $out"
+grep -q "^G1: satisfied.*EXPECT 'REAL'" <<<"$out" || fail "G1 lost its own CHECK to the stray bullet: $out"
+grep -q '^gates.md:5: parse-error' <<<"$out" || fail "the mis-indented bullet was not reported: $out"
+grep -q '^gates.md:6: parse-error' <<<"$out" || fail "the orphaned CHECK was not reported: $out"
+grep -q '^## G2' "$RESULT" && fail "a line that is not a gate line became a gate"
+grep -q 'parse_errors=4' "$RESULT" || fail "summary does not explain the verdict: $(tail -1 "$RESULT")"
+pass "a mis-indented bullet cannot rewrite the gate above it"
+
+# 8g. Padding after the checkbox does not change the gate id an ABANDON must name.
+cat > "$GATES" <<'GATES_EOF'
+- [ ]  G1: two spaces after the box
+  CHECK: cat README.md
+  EXPECT: hello
+  EVIDENCE: pending
+ABANDON: G1 dropped from scope
+GATES_EOF
+out=$(run t1 --accept-abandon G1 2>&1); rc=$?
+[ "$rc" -eq 0 ] || fail "the padded gate id should be the one ABANDON names, got $rc: $out"
+grep -q '^G1: abandoned - accepted' <<<"$out" || fail "padded gate id was not matched: $out"
+pass "the gate id is read the same way wherever it appears"
 
 # 9. No gates.md: explicit no-op, exit 0, no result written.
 mkdir -p "$HOME_DIR/data/t2"

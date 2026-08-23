@@ -20,6 +20,14 @@
 #   ABANDON: G3 <reason>
 # A gate is the checkbox line plus its indented CHECK/EVIDENCE/EXPECT lines; gate ids
 # are free-form tokens before the colon (G1, G2a, ...). Every other line is ignored.
+# The shape is strict, because a human edits this file and a slip must not decide a
+# gate quietly: a checkbox line sits at column 0, and each CHECK/EXPECT/EVIDENCE line
+# is indented under it, carries a space after the colon, and appears at most once.
+# A line whose trimmed form starts with "- [" but is not a checkbox line, and a
+# CHECK/EXPECT/EVIDENCE line that is unindented, belongs to no gate, repeats one
+# already given, or lacks the space, are each reported as a parse-error naming the
+# line number, and none of them changes a gate. So a mis-indented bullet can no
+# longer hand its CHECK to the gate above it.
 # ABANDON lines stand on their own line, anywhere in the file, and name a gate id.
 # EVIDENCE: pending is the literal the intake writes, compared ignoring case and
 # surrounding whitespace; a gate with no EVIDENCE line at all counts as pending
@@ -44,6 +52,9 @@
 #   unparseable a gates.md that exists but declares no gate line at all. Reported
 #               once against the file rather than a gate: nothing could be
 #               checked, and a malformed intake file must not read as a pass.
+#   parse-error a line that looks like part of the format but does not match it.
+#               Reported against gates.md:<line>, never against a gate, and the
+#               line is discarded rather than applied to the nearest gate.
 #
 # gates-result.md layout (this header is its single owner):
 #   # Gates result for <id>
@@ -53,6 +64,7 @@
 #   timeout: <seconds per CHECK>
 #   ## <gate-id>: satisfied|unsatisfied|abandoned|abandon-unknown
 #   ## gates.md: unparseable
+#   ## gates.md:<line>: parse-error
 #   reason: <one line: why the verdict was reached>
 #   output: <the excerpt that decided the verdict, fenced, when the CHECK ran:
 #            the first line containing EXPECT with 3 lines of context each side,
@@ -60,13 +72,14 @@
 #            the longest backtick run in the excerpt, so a CHECK that prints
 #            Markdown cannot close the block early.>
 #   ## Summary
-#   satisfied=<n> unsatisfied=<n> abandoned=<n> accepted=<n> abandon_unknown=<n> unparseable=<n> exit=<code>
+#   satisfied=<n> unsatisfied=<n> abandoned=<n> accepted=<n> abandon_unknown=<n> unparseable=<n> parse_errors=<n> exit=<code>
 # The file is replaced atomically on each run; the previous run is not kept.
 #
 # Exit codes:
 #   0 every gate satisfied, and every abandoned gate accepted on this command line.
 #   1 at least one gate unsatisfied, or an abandoned gate not accepted, or an
-#     ABANDON naming an unknown gate, or a gates.md that declares no gate at all.
+#     ABANDON naming an unknown gate, a gates.md that declares no gate at all, or
+#     a line that does not match the format.
 #   2 usage error, unreadable meta or copy, or no worktree= in the meta.
 # A task with no data/<id>/gates.md prints "no gates for <id>" and exits 0 without
 # writing gates-result.md: nothing was declared, so nothing is owed.
@@ -181,13 +194,24 @@ GATE_EXPECTS=()
 GATE_EVIDENCES=()
 ABANDON_IDS=()
 ABANDON_REASONS=()
+PARSE_ERROR_LINES=()
+PARSE_ERROR_MSGS=()
 cur=-1
+lineno=0
+
+parse_error() {
+  PARSE_ERROR_LINES+=("$1")
+  PARSE_ERROR_MSGS+=("$2")
+}
+
 while IFS= read -r line || [ -n "$line" ]; do
+  lineno=$((lineno + 1))
   line=${line%$'\r'}
   case "$line" in
     -\ \[\ \]\ *:*|-\ \[[xX]\]\ *:*)
       box=${line:3:1}
       rest=${line#- \[?\] }
+      rest=${rest#"${rest%%[![:space:]]*}"}
       gid=${rest%%:*}
       gid=${gid%"${gid##*[![:space:]]}"}
       GATE_IDS+=("$gid"); GATE_BOXES+=("$box")
@@ -203,15 +227,38 @@ while IFS= read -r line || [ -n "$line" ]; do
       ABANDON_IDS+=("$aid"); ABANDON_REASONS+=("$reason")
       ;;
     *)
-      [ "$cur" -ge 0 ] || continue
       trimmed=${line#"${line%%[![:space:]]*}"}
       case "$trimmed" in
-        CHECK:\ *) GATE_CHECKS[cur]=${trimmed#CHECK: } ;;
-        CHECK:) GATE_CHECKS[cur]="" ;;
-        EXPECT:\ *) GATE_EXPECTS[cur]=${trimmed#EXPECT: } ;;
-        EXPECT:) GATE_EXPECTS[cur]="" ;;
-        EVIDENCE:\ *) GATE_EVIDENCES[cur]=${trimmed#EVIDENCE: } ;;
-        EVIDENCE:) GATE_EVIDENCES[cur]="" ;;
+        -\ \[*)
+          parse_error "$lineno" "checkbox line does not match '- [ ] <id>: <outcome>' at column 0"
+          continue ;;
+        CHECK:|CHECK:\ *|EXPECT:|EXPECT:\ *|EVIDENCE:|EVIDENCE:\ *) ;;
+        CHECK:*|EXPECT:*|EVIDENCE:*)
+          parse_error "$lineno" "${trimmed%%:*} line needs a space after the colon"
+          continue ;;
+        *) continue ;;
+      esac
+      key=${trimmed%%:*}
+      value=${trimmed#"$key":}
+      value=${value# }
+      if [ "$cur" -lt 0 ]; then
+        parse_error "$lineno" "$key line belongs to no gate"
+        continue
+      fi
+      if [ "$trimmed" = "$line" ]; then
+        parse_error "$lineno" "$key line is not indented under a gate"
+        continue
+      fi
+      case "$key" in
+        CHECK)
+          [ -z "${GATE_CHECKS[cur]}" ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has a CHECK"; continue; }
+          GATE_CHECKS[cur]=$value ;;
+        EXPECT)
+          [ -z "${GATE_EXPECTS[cur]}" ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has an EXPECT"; continue; }
+          GATE_EXPECTS[cur]=$value ;;
+        EVIDENCE)
+          [ -z "${GATE_EVIDENCES[cur]}" ] || { parse_error "$lineno" "gate ${GATE_IDS[cur]} already has an EVIDENCE"; continue; }
+          GATE_EVIDENCES[cur]=$value ;;
       esac
       ;;
   esac
@@ -228,7 +275,7 @@ abandon_index() {
 # --- run ---------------------------------------------------------------------
 HEAD=$(git -C "$COPY" rev-parse HEAD 2>/dev/null || echo unknown)
 STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-n_sat=0; n_unsat=0; n_aband=0; n_acc=0; n_unknown=0; n_unparseable=0
+n_sat=0; n_unsat=0; n_aband=0; n_acc=0; n_unknown=0; n_unparseable=0; n_parse=0
 out=
 TMP=$(mktemp "$DATA/$ID/.gates-result.XXXXXX")
 trap 'rm -f "$TMP" ${out:+"$out"}' EXIT
@@ -254,11 +301,11 @@ excerpt() {  # <output-file> [expect]
       from=$((n - OUTPUT_CONTEXT))
       [ "$from" -ge 1 ] || from=1
       to=$((n + OUTPUT_CONTEXT))
-      sed -n "${from},${to}p" "$file"
+      sed -n "${from},${to}p" "$file" | tr -d '\0'
       return 0
     fi
   fi
-  tail -n "$OUTPUT_LINES" "$file"
+  tail -n "$OUTPUT_LINES" "$file" | tr -d '\0'
 }
 
 # A fence longer than the longest backtick run the excerpt opens a line with,
@@ -291,6 +338,11 @@ emit() {  # <id> <verdict> <reason> [output-file] [expect]
   } >> "$TMP"
   echo "$1: $2 - $3"
 }
+
+for i in "${!PARSE_ERROR_LINES[@]}"; do
+  n_parse=$((n_parse + 1))
+  emit "gates.md:${PARSE_ERROR_LINES[$i]}" parse-error "${PARSE_ERROR_MSGS[$i]}"
+done
 
 if [ "${#GATE_IDS[@]}" -eq 0 ]; then
   n_unparseable=1
@@ -362,10 +414,10 @@ for i in "${!ABANDON_IDS[@]}"; do
 done
 
 SUMMARY="satisfied=$n_sat unsatisfied=$n_unsat abandoned=$n_aband accepted=$n_acc"
-SUMMARY="$SUMMARY abandon_unknown=$n_unknown unparseable=$n_unparseable"
+SUMMARY="$SUMMARY abandon_unknown=$n_unknown unparseable=$n_unparseable parse_errors=$n_parse"
 exit_code=0
 if [ "$n_unsat" -gt 0 ] || [ "$n_unknown" -gt 0 ] || [ "$n_unparseable" -gt 0 ] ||
-  [ "$n_aband" -ne "$n_acc" ]; then
+  [ "$n_parse" -gt 0 ] || [ "$n_aband" -ne "$n_acc" ]; then
   exit_code=1
 fi
 {
