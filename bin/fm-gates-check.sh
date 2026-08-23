@@ -23,11 +23,15 @@
 # The shape is strict, because a human edits this file and a slip must not decide a
 # gate quietly: a checkbox line sits at column 0, and each CHECK/EXPECT/EVIDENCE line
 # is indented under it, carries a space after the colon, and appears at most once.
-# A line whose trimmed form starts with "- [" but is not a checkbox line, and a
+# A checkbox-shaped line ("- []" or "- [" plus one character plus "]") that is not a
+# gate line, a line starting with ABANDON that is not an abandon line, and a
 # CHECK/EXPECT/EVIDENCE line that is unindented, belongs to no gate, repeats one
 # already given, or lacks the space, are each reported as a parse-error naming the
-# line number, and none of them changes a gate. So a mis-indented bullet can no
-# longer hand its CHECK to the gate above it.
+# line number, and none of them changes a gate.
+# A rejected checkbox line also closes the gate above it, so the fields that follow
+# are reported rather than adopted by a gate they were never written for.
+# An ordinary bullet, a Markdown link bullet, and any other prose stay ignored: only
+# a line that is trying to be part of the format is held to it.
 # ABANDON lines stand on their own line, anywhere in the file, and name a gate id.
 # EVIDENCE: pending is the literal the intake writes, compared ignoring case and
 # surrounding whitespace; a gate with no EVIDENCE line at all counts as pending
@@ -222,6 +226,10 @@ while IFS= read -r line || [ -n "$line" ]; do
       rest=${line#ABANDON: }
       rest=${rest#"${rest%%[![:space:]]*}"}
       aid=${rest%%[[:space:]]*}
+      if [ -z "$aid" ]; then
+        parse_error "$lineno" "ABANDON line names no gate id"
+        continue
+      fi
       reason=${rest#"$aid"}
       reason=${reason#"${reason%%[![:space:]]*}"}
       ABANDON_IDS+=("$aid"); ABANDON_REASONS+=("$reason")
@@ -229,8 +237,12 @@ while IFS= read -r line || [ -n "$line" ]; do
     *)
       trimmed=${line#"${line%%[![:space:]]*}"}
       case "$trimmed" in
-        -\ \[*)
+        -\ \[\]*|-\ \[?\]*)
           parse_error "$lineno" "checkbox line does not match '- [ ] <id>: <outcome>' at column 0"
+          cur=-1
+          continue ;;
+        ABANDON*)
+          parse_error "$lineno" "ABANDON line does not match 'ABANDON: <gate-id> <reason>' at column 0"
           continue ;;
         CHECK:|CHECK:\ *|EXPECT:|EXPECT:\ *|EVIDENCE:|EVIDENCE:\ *) ;;
         CHECK:*|EXPECT:*|EVIDENCE:*)
