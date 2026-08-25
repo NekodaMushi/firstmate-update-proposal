@@ -58,6 +58,12 @@
 # four characters, meaning a "[" whose content up to the "]" is only spaces, tabs, x,
 # or X. So "* [ ] G2", "-[ ] G2", "- [ x] G2" and "- [ ]G2:" are errors, while the
 # Markdown link bullet "- [issue#2](url)" and ordinary prose stay context.
+# A gate line the detector does not see usually orphans the field lines beneath it,
+# and those are reported, which is what keeps a slipped gate from passing unnoticed.
+# A gate line it does not see that carries no fields at all has nothing to orphan, so
+# it is lost in silence: "> - [ ] G2: not done yet" written on its own leaves G2 out
+# of the run entirely rather than unsatisfied for having no CHECK. Declare a gate with
+# its fields, and the slip is caught.
 # A line whose trimmed form starts with ABANDON, CHECK:, EXPECT:, or EVIDENCE: is held
 # to that shape for the same reason, and so is what is left of it once any leading list
 # markers ("- ", "* ", "+ ", "1. ") are stripped, again while that keeps changing the
@@ -66,6 +72,15 @@
 # naming their line rather than a second accepted spelling. A bulleted abandon is the
 # natural thing to write under a list of bulleted gates and carries no fields of its
 # own, so nothing downstream would notice it going missing.
+# Those strips are a courtesy, not the boundary: no list of markers can cover every
+# way a human writes one, so the last word belongs to the line that was about to be
+# discarded as context. If it carries "ABANDON:" anywhere in it, it is an error naming
+# its line instead, whether the marker was glued to the word ("-ABANDON: G3 dropped"),
+# spelled some other way ("1) ABANDON: G3 dropped", "> ABANDON: G3 dropped"), or
+# composed ("- # ABANDON: G3 dropped"). An accepted CHECK, EXPECT or EVIDENCE line is
+# recognised before that test is reached, so a gate can still name the word inside its
+# own value; the cost is that prose that literally writes "ABANDON:" is an error, the
+# same collateral already accepted for "<!--".
 # A leading "#" buys no exemption from any of this. Strip the run of hashes and the
 # whitespace behind it, again while that keeps changing the line, and what is left is
 # held to the same shapes, list markers stripped too: "# Gates for t1" and "## G2
@@ -496,6 +511,10 @@ while IFS= read -r line || [ -n "$line" ]; do
       ABANDON_IDS+=("$aid"); ABANDON_REASONS+=("$reason")
       cur=-1; continue ;;
     CHECK:*|EXPECT:*|EVIDENCE:*) ;;
+    *ABANDON:*)
+      parse_error "$lineno" \
+        "ABANDON: sits in a line the format does not recognise; it takes 'ABANDON: <gate-id> <reason>' at column 0"
+      cur=-1; continue ;;
     *) cur=-1; continue ;;
   esac
 

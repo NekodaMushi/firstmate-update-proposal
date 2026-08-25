@@ -318,6 +318,7 @@ a bulleted abandon|$REF\n- ABANDON: G1 dropped|5|1
 a numbered abandon|$REF\n1. ABANDON: G1 dropped|5|1
 a bulleted field|$REF\n- CHECK: cat README.md|5|1
 a bulleted line that names no shape is context|$REF\n- G2 was moved to a follow-up||0
+a gate may assert on the word in its own value|- [ ] G1: the CHECK prints the word\n  CHECK: echo "ABANDON: G9 dropped"\n  EXPECT: ABANDON: G9 dropped\n  EVIDENCE: pending||0
 an html comment opened mid-line|$REF\n- [ ] G2: x <!-- dropped -->|5|1
 a bare block-comment opener|$REF\n<!--|5|1
 a bare block-comment closer|$REF\n-->|5|1
@@ -340,7 +341,7 @@ an abandon with no reason|$REF\nABANDON: G1|5|1
 an abandon with no id|$REF\nABANDON:   |5|1
 an id abandoned twice|$REF\nABANDON: G9 dropped\nABANDON: G9 dropped again|6|1
 TABLE
-[ "$rows" -eq 44 ] || fail "the grammar table ran $rows rows, not 44"
+[ "$rows" -eq 45 ] || fail "the grammar table ran $rows rows, not 45"
 pass "the grammar takes its three shapes, ignores context, and reports every slip"
 
 # 8g. A line the checker does not recognise closes the gate above it, so a field
@@ -473,10 +474,11 @@ grep -q '^G1: unsatisfied.*(exit 139)$' <<<"$out" \
 grep -q 'exit 139' "$RESULT" || fail "the result file lost the signal exit code: $(cat "$RESULT")"
 pass "a CHECK killed by a signal is recorded as 128+signal on either timer path"
 
-# 8l. No marker deletes an ABANDON, whether it comments the line out or merely
-#     bullets it to match the gates above. Either used to hand the gate back to the
-#     checker, which ran its CHECK and passed it at exit 0 with nothing reported; the
-#     hidden line is now named, no gate is given a verdict, and the run fails.
+# 8l. No marker deletes an ABANDON, whether it comments the line out, bullets it to
+#     match the gates above, or is glued to the word in a spelling no strip covers.
+#     Any of them used to hand the gate back to the checker, which ran its CHECK and
+#     passed it at exit 0 with nothing reported; the hidden line is now named, no gate
+#     is given a verdict, and the run fails.
 ABANDONED='- [ ] G1: README mentions hello\n  CHECK: cat README.md\n  EXPECT: hello\n  EVIDENCE: pending\n- [ ] G3: the feature we gave up on\n  CHECK: cat README.md\n  EXPECT: hello\n  EVIDENCE: pending'
 rows=0
 while IFS='|' read -r desc marker; do
@@ -499,8 +501,15 @@ an asterisk bullet|* ABANDON: G3 upstream removed the feature
 a plus bullet|+ ABANDON: G3 upstream removed the feature
 a numbered bullet|1. ABANDON: G3 upstream removed the feature
 a bullet behind a hash|# - ABANDON: G3 upstream removed the feature
+a hash behind a bullet|- # ABANDON: G3 upstream removed the feature
+a dash glued to the word|-ABANDON: G3 upstream removed the feature
+an asterisk glued to the word|*ABANDON: G3 upstream removed the feature
+a plus glued to the word|+ABANDON: G3 upstream removed the feature
+a number glued to the word|1.ABANDON: G3 upstream removed the feature
+a parenthesised number|1) ABANDON: G3 upstream removed the feature
+a blockquote|> ABANDON: G3 upstream removed the feature
 TABLE
-[ "$rows" -eq 9 ] || fail "the hidden-abandon table ran $rows rows, not 9"
+[ "$rows" -eq 16 ] || fail "the hidden-abandon table ran $rows rows, not 16"
 pass "no marker quietly turns an abandoned gate back into a passing one"
 
 # 8m. A block comment cannot smuggle a gate past the checker either. Both of its
