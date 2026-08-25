@@ -1,0 +1,120 @@
+=== data/t42/gates.md as firstmate wrote it ===
+# Gates for t42: the greeter speaks
+
+- [ ] G1: the greeter prints a greeting
+  CHECK: ./src/greet.sh
+  EXPECT: hello, sailor
+  EVIDENCE: pending
+- [ ] G2: the README documents the greeter
+  CHECK: cat README.md
+  EXPECT: ./src/greet.sh
+  EVIDENCE: pending
+- [x] G3: the greeter is executable
+  CHECK: test -x src/greet.sh && echo executable
+  EXPECT: executable
+  EVIDENCE: pending
+- [ ] G4: the Windows installer ships
+  CHECK: ls dist/greeter.msi
+  EXPECT: greeter.msi
+  EVIDENCE: pending
+ABANDON: G4 Windows support dropped upstream, see issue #17
+
+$ fm-gates-check.sh t42
+G1: satisfied - output contained EXPECT 'hello, sailor' (exit 0)
+G2: unsatisfied - output lacked EXPECT './src/greet.sh' (exit 0)
+G3: unsatisfied - box ticked by hand while EVIDENCE is still pending; the tick is an unbacked claim (CHECK output did contain EXPECT, exit 0)
+G4: abandoned - not accepted; reason given: Windows support dropped upstream, see issue #17; pass --accept-abandon G4 to accept
+summary: satisfied=1 unsatisfied=2 abandoned=1 accepted=0 abandon_unknown=0 unparseable=0 parse_errors=0 -> /tmp/fm-gates-demo.8swcs5/home/data/t42/gates-result.md
+(exit 1)
+
+$ cat data/t42/gates-result.md
+# Gates result for t42
+copy: /tmp/fm-gates-demo.8swcs5/copy-of-firstmate
+head: cc785a54bd5701abb8a112dfd105dfbefcaa6fa1
+checked: 2026-08-25T18:52:20Z
+timeout: 120
+
+## G1: satisfied
+reason: output contained EXPECT 'hello, sailor' (exit 0)
+output:
+```
+hello, sailor
+```
+
+## G2: unsatisfied
+reason: output lacked EXPECT './src/greet.sh' (exit 0)
+output:
+```
+# Greeter
+```
+
+## G3: unsatisfied
+reason: box ticked by hand while EVIDENCE is still pending; the tick is an unbacked claim (CHECK output did contain EXPECT, exit 0)
+output:
+```
+executable
+```
+
+## G4: abandoned
+reason: not accepted; reason given: Windows support dropped upstream, see issue #17; pass --accept-abandon G4 to accept
+
+## Summary
+satisfied=1 unsatisfied=2 abandoned=1 accepted=0 abandon_unknown=0 unparseable=0 parse_errors=0 exit=1
+
+$ stat -c '%a %n' data/t42/gates-result.md
+600 /tmp/fm-gates-demo.8swcs5/home/data/t42/gates-result.md
+
+$ ls data/t42/   # gates-result.md is the only file written
+gates.md
+gates-result.md
+
+$ gates.md untouched?
+yes: checksum unchanged (1375165148 551)
+
+$ git -C copy status --porcelain   # the copy is untouched, and G4's CHECK never ran
+(clean if nothing above)
+
+$ fm-gates-check.sh t42 --accept-abandon G4
+G1: satisfied - output contained EXPECT 'hello, sailor' (exit 0)
+G2: unsatisfied - output lacked EXPECT './src/greet.sh' (exit 0)
+G3: unsatisfied - box ticked by hand while EVIDENCE is still pending; the tick is an unbacked claim (CHECK output did contain EXPECT, exit 0)
+G4: abandoned - accepted via --accept-abandon; reason given: Windows support dropped upstream, see issue #17
+summary: satisfied=1 unsatisfied=2 abandoned=1 accepted=1 abandon_unknown=0 unparseable=0 parse_errors=0 -> /tmp/fm-gates-demo.8swcs5/home/data/t42/gates-result.md
+(exit 1)
+
+=== the author fixes the README and records G3's evidence ===
+
+$ echo 'Run ./src/greet.sh to say hello.' >> README.md
+
+$ sed -i 's/EVIDENCE: pending/EVIDENCE: verified on 2026-08-25, mode 0755/' the G3 block
+
+$ fm-gates-check.sh t42 --accept-abandon G4
+G1: satisfied - output contained EXPECT 'hello, sailor' (exit 0)
+G2: satisfied - output contained EXPECT './src/greet.sh' (exit 0)
+G3: satisfied - output contained EXPECT 'executable' (exit 0)
+G4: abandoned - accepted via --accept-abandon; reason given: Windows support dropped upstream, see issue #17
+summary: satisfied=3 unsatisfied=0 abandoned=1 accepted=1 abandon_unknown=0 unparseable=0 parse_errors=0 -> /tmp/fm-gates-demo.8swcs5/home/data/t42/gates-result.md
+(exit 0)
+
+$ tail -3 data/t42/gates-result.md
+
+## Summary
+satisfied=3 unsatisfied=0 abandoned=1 accepted=1 abandon_unknown=0 unparseable=0 parse_errors=0 exit=0
+
+=== other end-user paths ===
+
+$ fm-gates-check.sh t43
+no gates for t43 (/tmp/fm-gates-demo.8swcs5/home/data/t43/gates.md absent); nothing to check
+(exit 0)
+
+$ ls data/t43/   # no result file for a task that declared no gates
+(empty if nothing above)
+
+$ fm-gates-check.sh t99
+no gates for t99 (/tmp/fm-gates-demo.8swcs5/home/data/t99/gates.md absent); nothing to check
+(exit 0)
+
+$ fm-gates-check.sh t44 --timeout 2
+G1: unsatisfied - CHECK timed out after 2s
+summary: satisfied=0 unsatisfied=1 abandoned=0 accepted=0 abandon_unknown=0 unparseable=0 parse_errors=0 -> /tmp/fm-gates-demo.8swcs5/home/data/t44/gates-result.md
+(exit 1)

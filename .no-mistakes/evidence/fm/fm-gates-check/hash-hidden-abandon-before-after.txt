@@ -1,0 +1,7 @@
+hidden ABANDON line                 before (3c347e6)                                      after (0576a6d)
+----------------------------------  ----------------------------------------------------  ----------------------------------------------------
+#> ABANDON: G3 gone                 exit 0  G3: satisfied - output contained EXPECT 'hello' (exit 0)  exit 1  gates.md:9: parse-error - ABANDON: sits in a line the format does not recognise; it takes 'ABANDON: <gate-id> <reason>' at column 0
+# note ABANDON: G3 gone             exit 0  G3: satisfied - output contained EXPECT 'hello' (exit 0)  exit 1  gates.md:9: parse-error - ABANDON: sits in a line the format does not recognise; it takes 'ABANDON: <gate-id> <reason>' at column 0
+## > ABANDON: G3 gone               exit 0  G3: satisfied - output contained EXPECT 'hello' (exit 0)  exit 1  gates.md:9: parse-error - ABANDON: sits in a line the format does not recognise; it takes 'ABANDON: <gate-id> <reason>' at column 0
+#1) ABANDON: G3 gone                exit 0  G3: satisfied - output contained EXPECT 'hello' (exit 0)  exit 1  gates.md:9: parse-error - ABANDON: sits in a line the format does not recognise; it takes 'ABANDON: <gate-id> <reason>' at column 0
+#> - ABANDON: G3 gone               exit 0  G3: satisfied - output contained EXPECT 'hello' (exit 0)  exit 1  gates.md:9: parse-error - ABANDON: sits in a line the format does not recognise; it takes 'ABANDON: <gate-id> <reason>' at column 0
