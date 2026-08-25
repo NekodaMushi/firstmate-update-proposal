@@ -56,13 +56,18 @@
 # A line whose trimmed form starts with ABANDON, CHECK:, EXPECT:, or EVIDENCE: is held
 # to that shape for the same reason.
 # A leading "#" buys no exemption from either rule. Strip the run of hashes and the
-# whitespace behind it, and what is left is held to the same shapes: "# Gates for t1"
-# and "## G2 notes" are prose and stay context, while "#- [ ] G2", "## [x] done",
-# "#ABANDON: G3 dropped" and "# CHECK: cat README.md" are errors naming their line.
+# whitespace behind it, again while that keeps changing the line, and what is left is
+# held to the same shapes: "# Gates for t1" and "## G2 notes" are prose and stay
+# context, while "#- [ ] G2", "## [x] done", "#ABANDON: G3 dropped", the doubled
+# "# #ABANDON: G3 dropped" and "# CHECK: cat README.md" are errors naming their line.
+# gates.md has no comment syntax of its own, so a line whose trimmed form opens with
+# "<!--" is an error whatever it carries.
 # Commenting a line out is how a human deletes it, and a deleted ABANDON turns a gate
-# the author gave up on back into one the checker runs and can pass, so a hash has to
-# say what it hides. The cost is that a heading opening with one of those four words,
-# "# ABANDON notes", is an error too.
+# the author gave up on back into one the checker runs and can pass, so no marker gets
+# to hide a line the format recognises. Withdraw a gate with ABANDON and annotate it
+# with prose that matches no shape. The cost is that a heading opening with one of
+# those four words, "# ABANDON notes", and a genuine "<!-- note to self -->" are
+# errors too.
 # EVIDENCE: pending is the literal the intake writes, compared ignoring case and
 # surrounding whitespace, and a value whose first word is pending reads the same
 # way, so "pending CI" and "pending (see #4)" refuse a hand tick exactly as the
@@ -370,9 +375,18 @@ while IFS= read -r line || [ -n "$line" ]; do
   fi
 
   case "$trimmed" in
+    '<!--'*)
+      parse_error "$lineno" \
+        "HTML comment; gates.md has no comment syntax, so nothing here can hide a line"
+      cur=-1; continue ;;
     '#'*)
-      uncommented=${trimmed#"${trimmed%%[!#]*}"}
-      uncommented=${uncommented#"${uncommented%%[![:space:]]*}"}
+      uncommented=$trimmed
+      while :; do
+        stripped=${uncommented#"${uncommented%%[!#]*}"}
+        stripped=${stripped#"${stripped%%[![:space:]]*}"}
+        [ "$stripped" != "$uncommented" ] || break
+        uncommented=$stripped
+      done
       hidden=
       if opens_a_box "$uncommented"; then
         hidden=gate

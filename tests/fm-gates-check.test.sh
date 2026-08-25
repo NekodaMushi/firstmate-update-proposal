@@ -5,9 +5,9 @@
 # that declares nothing parseable, a timed-out CHECK through both the timeout(1)
 # and the perl paths, the deciding excerpt, output carrying NUL bytes, the parse
 # errors a hand-edited file can carry, the prose it may carry safely, the format
-# lines a '#' cannot hide, the padding it may carry around a value, the exit code
-# of a CHECK killed by a signal, the task ids and timeout values that are refused
-# outright, and the no-write guarantees.
+# lines a comment marker cannot hide, the padding it may carry around a value, the
+# exit code of a CHECK killed by a signal, the task ids and timeout values that
+# are refused outright, and the no-write guarantees.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -302,6 +302,9 @@ a box inside a heading|$REF\n## [x] done|5|1
 a box behind a hash and a space|$REF\n# - [ ] G2: x|5|1
 a commented-out abandon|$REF\n#ABANDON: G1 dropped|5|1
 a commented-out field|$REF\n# CHECK: cat README.md|5|1
+a doubled hash marker|$REF\n# #ABANDON: G1 dropped|5|1
+an html comment holding an abandon|$REF\n<!-- ABANDON: G1 dropped -->|5|1
+an html comment holding only prose|$REF\n<!-- a note to the reviewer -->|5|1
 a heading that only names a gate is context|$REF\n## G2 notes||0
 a comment that only reads as prose is context|$REF\n# G2 was moved to a follow-up||0
 an indented gate line|$REF\n - [ ] G2: x|5|1
@@ -321,7 +324,7 @@ an abandon with no reason|$REF\nABANDON: G1|5|1
 an abandon with no id|$REF\nABANDON:   |5|1
 an id abandoned twice|$REF\nABANDON: G9 dropped\nABANDON: G9 dropped again|6|1
 TABLE
-[ "$rows" -eq 33 ] || fail "the grammar table ran $rows rows, not 33"
+[ "$rows" -eq 36 ] || fail "the grammar table ran $rows rows, not 36"
 pass "the grammar takes its three shapes, ignores context, and reports every slip"
 
 # 8g. A line the checker does not recognise closes the gate above it, so a field
@@ -355,11 +358,12 @@ an abandon of another gate|ABANDON: G9 dropped elsewhere|5
 a rejected gate line|* [ ] G2: an asterisk bullet|4 5
 a gate line commented out with a hash|#- [ ] G2: commented out|4 5
 an abandon commented out with a hash|#ABANDON: G9 dropped elsewhere|4 5
+an abandon inside an html comment|<!-- ABANDON: G9 dropped elsewhere -->|4 5
 an unindented field|CHECK: stray at column zero|4 5
 an indented field missing its space|  EXPECT:nope|4 5
 an indented field with no value|  EXPECT:   |4 5
 TABLE
-[ "$rows" -eq 12 ] || fail "the adoption table ran $rows rows, not 12"
+[ "$rows" -eq 13 ] || fail "the adoption table ran $rows rows, not 13"
 pass "a stray line closes the gate above it instead of feeding it"
 
 # 8h. A second ABANDON of a gate already abandoned is refused on its own line, so
@@ -448,26 +452,27 @@ grep -q '^G1: unsatisfied.*(exit 139)$' <<<"$out" \
 grep -q 'exit 139' "$RESULT" || fail "the result file lost the signal exit code: $(cat "$RESULT")"
 pass "a CHECK killed by a signal is recorded as 128+signal on either timer path"
 
-# 8l. A hash does not delete an ABANDON. Commenting one out used to hand the gate
+# 8l. No comment marker deletes an ABANDON. Commenting one out used to hand the gate
 #     back to the checker, which ran its CHECK and passed it at exit 0 with nothing
 #     reported; the hidden line is now named and the run fails.
-cat > "$GATES" <<'GATES_EOF'
-- [ ] G1: README mentions hello
-  CHECK: cat README.md
-  EXPECT: hello
-  EVIDENCE: pending
-- [ ] G3: the feature we gave up on
-  CHECK: cat README.md
-  EXPECT: hello
-  EVIDENCE: pending
-#ABANDON: G3 upstream removed the feature
-GATES_EOF
-out=$(run t1 --accept-abandon G3 2>&1); rc=$?
-[ "$rc" -eq 1 ] || fail "a commented-out ABANDON should not pass the run, got $rc: $out"
-grep -q '^gates.md:9: parse-error' <<<"$out" || fail "the hidden ABANDON was dropped in silence: $out"
-grep -q ' abandoned=0 accepted=0 .* parse_errors=1 exit=1$' "$RESULT" \
-  || fail "the hidden ABANDON left the summary claiming a clean run: $(tail -1 "$RESULT")"
-pass "commenting out an ABANDON is reported instead of quietly passing its gate"
+ABANDONED='- [ ] G1: README mentions hello\n  CHECK: cat README.md\n  EXPECT: hello\n  EVIDENCE: pending\n- [ ] G3: the feature we gave up on\n  CHECK: cat README.md\n  EXPECT: hello\n  EVIDENCE: pending'
+rows=0
+while IFS='|' read -r desc marker; do
+  case "$desc" in ''|'#'*) continue ;; esac
+  rows=$((rows + 1))
+  printf '%b\n' "$ABANDONED\n$marker" > "$GATES"
+  out=$(run t1 --accept-abandon G3 2>&1); rc=$?
+  [ "$rc" -eq 1 ] || fail "$desc: a hidden ABANDON should not pass the run, got $rc: $out"
+  grep -q '^gates.md:9: parse-error' <<<"$out" || fail "$desc: the hidden ABANDON was dropped in silence: $out"
+  grep -q ' abandoned=0 accepted=0 .* parse_errors=1 exit=1$' "$RESULT" \
+    || fail "$desc: the hidden ABANDON left the summary claiming a clean run: $(tail -1 "$RESULT")"
+done <<TABLE
+a hash|#ABANDON: G3 upstream removed the feature
+a doubled hash|# #ABANDON: G3 upstream removed the feature
+an html comment|<!-- ABANDON: G3 upstream removed the feature -->
+TABLE
+[ "$rows" -eq 3 ] || fail "the hidden-abandon table ran $rows rows, not 3"
+pass "no comment marker quietly turns an abandoned gate back into a passing one"
 
 # 9. No gates.md: explicit no-op, exit 0, no result written.
 mkdir -p "$HOME_DIR/data/t2"
