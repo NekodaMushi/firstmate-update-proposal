@@ -59,12 +59,19 @@
 # or X. So "* [ ] G2", "-[ ] G2", "- [ x] G2" and "- [ ]G2:" are errors, while the
 # Markdown link bullet "- [issue#2](url)" and ordinary prose stay context.
 # A line whose trimmed form starts with ABANDON, CHECK:, EXPECT:, or EVIDENCE: is held
-# to that shape for the same reason.
-# A leading "#" buys no exemption from either rule. Strip the run of hashes and the
+# to that shape for the same reason, and so is what is left of it once any leading list
+# markers ("- ", "* ", "+ ", "1. ") are stripped, again while that keeps changing the
+# line. The format takes exactly one spelling of an abandon, "ABANDON: <id> <reason>"
+# at column 0, so "- ABANDON: G3 dropped" and "1. ABANDON: G3 dropped" are errors
+# naming their line rather than a second accepted spelling. A bulleted abandon is the
+# natural thing to write under a list of bulleted gates and carries no fields of its
+# own, so nothing downstream would notice it going missing.
+# A leading "#" buys no exemption from any of this. Strip the run of hashes and the
 # whitespace behind it, again while that keeps changing the line, and what is left is
-# held to the same shapes: "# Gates for t1" and "## G2 notes" are prose and stay
-# context, while "#- [ ] G2", "## [x] done", "#ABANDON: G3 dropped", the doubled
-# "# #ABANDON: G3 dropped" and "# CHECK: cat README.md" are errors naming their line.
+# held to the same shapes, list markers stripped too: "# Gates for t1" and "## G2
+# notes" are prose and stay context, while "#- [ ] G2", "## [x] done",
+# "#ABANDON: G3 dropped", the doubled "# #ABANDON: G3 dropped", the composed
+# "# - ABANDON: G3 dropped" and "# CHECK: cat README.md" are errors naming their line.
 # gates.md has no comment syntax of its own, so a line carrying "<!--" or "-->"
 # anywhere in it is an error: at the head of the line, behind a hash, indented, after
 # a gate, or as either delimiter of a block comment. That is what closes the block
@@ -75,7 +82,10 @@
 # to hide a line the format recognises. Withdraw a gate with ABANDON and annotate it
 # with prose that matches no shape. The cost is that a heading opening with one of
 # those four words, "# ABANDON notes", a genuine "<!-- note to self -->", and prose
-# that merely quotes "<!--" are errors too.
+# that merely quotes "<!--" are errors too. So is a CHECK or an EXPECT that needs the
+# markers in its own value: the test runs on the whole line before any shape is
+# recognised, so "CHECK: grep -c -- '-->' index.html" and "EXPECT: <!-- generated -->"
+# are refused with no escape, and a gate cannot assert on HTML comments in its output.
 # EVIDENCE: pending is the literal the intake writes, compared ignoring case and
 # surrounding whitespace, and a value whose first word is pending reads the same
 # way, so "pending CI" and "pending (see #4)" refuse a hand tick exactly as the
@@ -337,6 +347,38 @@ opens_a_box() {
   return 0
 }
 
+# What is left of a line once its leading list markers are gone, stripped again while
+# that keeps changing it, so "- ABANDON:" and "1. - ABANDON:" reach the same test.
+demark() {
+  local s=$1 next
+  while :; do
+    next=$s
+    case "$s" in
+      [-*+][[:space:]]*|[-*+]) next=${s#?} ;;
+      [0-9]*)
+        next=${s#"${s%%[!0-9]*}"}
+        case "$next" in
+          .[[:space:]]*|.) next=${next#?} ;;
+          *) next=$s ;;
+        esac ;;
+    esac
+    next=${next#"${next%%[![:space:]]*}"}
+    [ "$next" != "$s" ] || break
+    s=$next
+  done
+  DEMARKED=$s
+}
+
+# The four keyword shapes, named when <line> is one of them and empty when it is not.
+keyword_shape() {
+  case "$1" in
+    ABANDON*) echo ABANDON ;;
+    CHECK:*) echo CHECK ;;
+    EXPECT:*) echo EXPECT ;;
+    EVIDENCE:*) echo EVIDENCE ;;
+  esac
+}
+
 while IFS= read -r line || [ -n "$line" ]; do
   lineno=$((lineno + 1))
   line=${line%$'\r'}
@@ -400,21 +442,26 @@ while IFS= read -r line || [ -n "$line" ]; do
         [ "$stripped" != "$uncommented" ] || break
         uncommented=$stripped
       done
-      hidden=
       if opens_a_box "$uncommented"; then
         hidden=gate
       else
-        case "$uncommented" in
-          ABANDON*) hidden=ABANDON ;;
-          CHECK:*) hidden=CHECK ;;
-          EXPECT:*) hidden=EXPECT ;;
-          EVIDENCE:*) hidden=EVIDENCE ;;
-        esac
+        demark "$uncommented"
+        hidden=$(keyword_shape "$DEMARKED")
       fi
       [ -z "$hidden" ] || parse_error "$lineno" \
         "commented-out $hidden line; a '#' does not hide a line the format recognises"
       cur=-1; continue ;;
   esac
+
+  demark "$trimmed"
+  if [ "$DEMARKED" != "$trimmed" ]; then
+    hidden=$(keyword_shape "$DEMARKED")
+    if [ -n "$hidden" ]; then
+      parse_error "$lineno" \
+        "$hidden line behind a list marker; the format takes it at column 0 with no bullet"
+      cur=-1; continue
+    fi
+  fi
 
   case "$trimmed" in
     ABANDON*)

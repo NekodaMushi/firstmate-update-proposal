@@ -5,9 +5,9 @@
 # that declares nothing parseable, a timed-out CHECK through both the timeout(1)
 # and the perl paths, the deciding excerpt, output carrying NUL bytes, the parse
 # errors a hand-edited file can carry, the prose it may carry safely, the format
-# lines a comment marker cannot hide, the refusal to decide anything in a file that
-# carries a parse error, the padding it may carry around a value, the exit code of a
-# CHECK killed by a signal, the task ids and timeout values that are refused
+# lines no comment or list marker can hide, the refusal to decide anything in a file
+# that carries a parse error, the padding it may carry around a value, the exit code
+# of a CHECK killed by a signal, the task ids and timeout values that are refused
 # outright, and the no-write guarantees.
 set -u
 
@@ -314,6 +314,10 @@ a doubled hash marker|$REF\n# #ABANDON: G1 dropped|5|1
 an html comment holding an abandon|$REF\n<!-- ABANDON: G1 dropped -->|5|1
 an html comment holding only prose|$REF\n<!-- a note to the reviewer -->|5|1
 an html comment behind a hash|$REF\n# <!-- ABANDON: G1 dropped -->|5|1
+a bulleted abandon|$REF\n- ABANDON: G1 dropped|5|1
+a numbered abandon|$REF\n1. ABANDON: G1 dropped|5|1
+a bulleted field|$REF\n- CHECK: cat README.md|5|1
+a bulleted line that names no shape is context|$REF\n- G2 was moved to a follow-up||0
 an html comment opened mid-line|$REF\n- [ ] G2: x <!-- dropped -->|5|1
 a bare block-comment opener|$REF\n<!--|5|1
 a bare block-comment closer|$REF\n-->|5|1
@@ -336,7 +340,7 @@ an abandon with no reason|$REF\nABANDON: G1|5|1
 an abandon with no id|$REF\nABANDON:   |5|1
 an id abandoned twice|$REF\nABANDON: G9 dropped\nABANDON: G9 dropped again|6|1
 TABLE
-[ "$rows" -eq 40 ] || fail "the grammar table ran $rows rows, not 40"
+[ "$rows" -eq 44 ] || fail "the grammar table ran $rows rows, not 44"
 pass "the grammar takes its three shapes, ignores context, and reports every slip"
 
 # 8g. A line the checker does not recognise closes the gate above it, so a field
@@ -469,9 +473,10 @@ grep -q '^G1: unsatisfied.*(exit 139)$' <<<"$out" \
 grep -q 'exit 139' "$RESULT" || fail "the result file lost the signal exit code: $(cat "$RESULT")"
 pass "a CHECK killed by a signal is recorded as 128+signal on either timer path"
 
-# 8l. No comment marker deletes an ABANDON. Commenting one out used to hand the gate
-#     back to the checker, which ran its CHECK and passed it at exit 0 with nothing
-#     reported; the hidden line is now named and the run fails.
+# 8l. No marker deletes an ABANDON, whether it comments the line out or merely
+#     bullets it to match the gates above. Either used to hand the gate back to the
+#     checker, which ran its CHECK and passed it at exit 0 with nothing reported; the
+#     hidden line is now named, no gate is given a verdict, and the run fails.
 ABANDONED='- [ ] G1: README mentions hello\n  CHECK: cat README.md\n  EXPECT: hello\n  EVIDENCE: pending\n- [ ] G3: the feature we gave up on\n  CHECK: cat README.md\n  EXPECT: hello\n  EVIDENCE: pending'
 rows=0
 while IFS='|' read -r desc marker; do
@@ -481,6 +486,7 @@ while IFS='|' read -r desc marker; do
   out=$(run t1 --accept-abandon G3 2>&1); rc=$?
   [ "$rc" -eq 1 ] || fail "$desc: a hidden ABANDON should not pass the run, got $rc: $out"
   grep -q '^gates.md:9: parse-error' <<<"$out" || fail "$desc: the hidden ABANDON was dropped in silence: $out"
+  grep -q '^## G3:' "$RESULT" && fail "$desc: the withdrawn gate was given a verdict anyway"
   grep -q ' abandoned=0 accepted=0 .* parse_errors=1 exit=1$' "$RESULT" \
     || fail "$desc: the hidden ABANDON left the summary claiming a clean run: $(tail -1 "$RESULT")"
 done <<TABLE
@@ -488,9 +494,14 @@ a hash|#ABANDON: G3 upstream removed the feature
 a doubled hash|# #ABANDON: G3 upstream removed the feature
 an html comment|<!-- ABANDON: G3 upstream removed the feature -->
 an html comment behind a hash|# <!-- ABANDON: G3 upstream removed the feature -->
+a dash bullet|- ABANDON: G3 upstream removed the feature
+an asterisk bullet|* ABANDON: G3 upstream removed the feature
+a plus bullet|+ ABANDON: G3 upstream removed the feature
+a numbered bullet|1. ABANDON: G3 upstream removed the feature
+a bullet behind a hash|# - ABANDON: G3 upstream removed the feature
 TABLE
-[ "$rows" -eq 4 ] || fail "the hidden-abandon table ran $rows rows, not 4"
-pass "no comment marker quietly turns an abandoned gate back into a passing one"
+[ "$rows" -eq 9 ] || fail "the hidden-abandon table ran $rows rows, not 9"
+pass "no marker quietly turns an abandoned gate back into a passing one"
 
 # 8m. A block comment cannot smuggle a gate past the checker either. Both of its
 #     delimiters are reported, and because a file with any parse error decides
