@@ -29,11 +29,11 @@
 #   field    indented by at least one space or tab, following its gate line with
 #            nothing but blank lines and accepted sibling fields in between, one of
 #            "CHECK: <value>", "EXPECT: <value>", "EVIDENCE: <value>". Each value is
-#            non-empty and each key appears at most once per gate, and trailing
-#            whitespace is stripped from it, so the two spaces a Markdown hard line
-#            break leaves behind never become part of the substring a gate is
-#            matched against. EXPECT is matched as text, so a CHECK that emits NUL
-#            bytes still decides its gate.
+#            non-empty and each key appears at most once per gate, and whitespace is
+#            stripped from both ends of it, so neither a doubled space after the
+#            colon nor the two spaces a Markdown hard line break leaves behind ever
+#            become part of the substring a gate is matched against. EXPECT is
+#            matched as text, so a CHECK that emits NUL bytes still decides its gate.
 #   abandon  at column 0, "ABANDON: <id> <reason>", both parts non-empty, anywhere in
 #            the file, and at most one per id: a second ABANDON naming an id an
 #            earlier line already abandoned is a parse error on that second line,
@@ -53,12 +53,16 @@
 # four characters, meaning a "[" whose content up to the "]" is only spaces, tabs, x,
 # or X. So "* [ ] G2", "-[ ] G2", "- [ x] G2" and "- [ ]G2:" are errors, while the
 # Markdown link bullet "- [issue#2](url)" and ordinary prose stay context.
-# A leading "#" buys no exemption from that rule: "# Gates for t1" is a heading and
-# stays context, but "#- [ ] G2" and "## [x] done" open a box inside the window and
-# are errors like any other slipped box, so a stray hash cannot delete a whole gate
-# without saying so.
 # A line whose trimmed form starts with ABANDON, CHECK:, EXPECT:, or EVIDENCE: is held
 # to that shape for the same reason.
+# A leading "#" buys no exemption from either rule. Strip the run of hashes and the
+# whitespace behind it, and what is left is held to the same shapes: "# Gates for t1"
+# and "## G2 notes" are prose and stay context, while "#- [ ] G2", "## [x] done",
+# "#ABANDON: G3 dropped" and "# CHECK: cat README.md" are errors naming their line.
+# Commenting a line out is how a human deletes it, and a deleted ABANDON turns a gate
+# the author gave up on back into one the checker runs and can pass, so a hash has to
+# say what it hides. The cost is that a heading opening with one of those four words,
+# "# ABANDON notes", is an error too.
 # EVIDENCE: pending is the literal the intake writes, compared ignoring case and
 # surrounding whitespace, and a value whose first word is pending reads the same
 # way, so "pending CI" and "pending (see #4)" refuse a hand tick exactly as the
@@ -365,7 +369,25 @@ while IFS= read -r line || [ -n "$line" ]; do
     continue
   fi
 
-  case "$trimmed" in '#'*) cur=-1; continue ;; esac
+  case "$trimmed" in
+    '#'*)
+      uncommented=${trimmed#"${trimmed%%[!#]*}"}
+      uncommented=${uncommented#"${uncommented%%[![:space:]]*}"}
+      hidden=
+      if opens_a_box "$uncommented"; then
+        hidden=gate
+      else
+        case "$uncommented" in
+          ABANDON*) hidden=ABANDON ;;
+          CHECK:*) hidden=CHECK ;;
+          EXPECT:*) hidden=EXPECT ;;
+          EVIDENCE:*) hidden=EVIDENCE ;;
+        esac
+      fi
+      [ -z "$hidden" ] || parse_error "$lineno" \
+        "commented-out $hidden line; a '#' does not hide a line the format recognises"
+      cur=-1; continue ;;
+  esac
 
   case "$trimmed" in
     ABANDON*)
@@ -415,8 +437,9 @@ while IFS= read -r line || [ -n "$line" ]; do
       cur=-1; continue ;;
   esac
   value=${trimmed#"$key": }
+  value=${value#"${value%%[![:space:]]*}"}
   value=${value%"${value##*[![:space:]]}"}
-  if [ -z "${value#"${value%%[![:space:]]*}"}" ]; then
+  if [ -z "$value" ]; then
     parse_error "$lineno" "$key line carries no value"
     cur=-1; continue
   fi

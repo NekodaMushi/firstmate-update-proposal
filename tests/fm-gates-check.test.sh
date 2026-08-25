@@ -4,10 +4,10 @@
 # written, no EVIDENCE line at all), a task with no gates.md, a gates.md
 # that declares nothing parseable, a timed-out CHECK through both the timeout(1)
 # and the perl paths, the deciding excerpt, output carrying NUL bytes, the parse
-# errors a hand-edited file can carry, the prose it may carry safely, the padding
-# it may carry around a value, the exit code of a CHECK killed by a signal, the
-# task ids and timeout values that are refused outright, and the no-write
-# guarantees.
+# errors a hand-edited file can carry, the prose it may carry safely, the format
+# lines a '#' cannot hide, the padding it may carry around a value, the exit code
+# of a CHECK killed by a signal, the task ids and timeout values that are refused
+# outright, and the no-write guarantees.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -299,6 +299,11 @@ no space after the box|$REF\n- [ ]G2: x|5|1
 a box with no bullet|$REF\n[x] G2: x|5|1
 a box commented out with a hash|$REF\n#- [ ] G2: x|5|1
 a box inside a heading|$REF\n## [x] done|5|1
+a box behind a hash and a space|$REF\n# - [ ] G2: x|5|1
+a commented-out abandon|$REF\n#ABANDON: G1 dropped|5|1
+a commented-out field|$REF\n# CHECK: cat README.md|5|1
+a heading that only names a gate is context|$REF\n## G2 notes||0
+a comment that only reads as prose is context|$REF\n# G2 was moved to a follow-up||0
 an indented gate line|$REF\n - [ ] G2: x|5|1
 a gate with no id|$REF\n- [ ] : an outcome with no id|5|1
 a gate id carrying whitespace|$REF\n- [ ] G 2: x|5|1
@@ -316,7 +321,7 @@ an abandon with no reason|$REF\nABANDON: G1|5|1
 an abandon with no id|$REF\nABANDON:   |5|1
 an id abandoned twice|$REF\nABANDON: G9 dropped\nABANDON: G9 dropped again|6|1
 TABLE
-[ "$rows" -eq 28 ] || fail "the grammar table ran $rows rows, not 28"
+[ "$rows" -eq 33 ] || fail "the grammar table ran $rows rows, not 33"
 pass "the grammar takes its three shapes, ignores context, and reports every slip"
 
 # 8g. A line the checker does not recognise closes the gate above it, so a field
@@ -349,11 +354,12 @@ a heading|## G2 notes|5
 an abandon of another gate|ABANDON: G9 dropped elsewhere|5
 a rejected gate line|* [ ] G2: an asterisk bullet|4 5
 a gate line commented out with a hash|#- [ ] G2: commented out|4 5
+an abandon commented out with a hash|#ABANDON: G9 dropped elsewhere|4 5
 an unindented field|CHECK: stray at column zero|4 5
 an indented field missing its space|  EXPECT:nope|4 5
 an indented field with no value|  EXPECT:   |4 5
 TABLE
-[ "$rows" -eq 11 ] || fail "the adoption table ran $rows rows, not 11"
+[ "$rows" -eq 12 ] || fail "the adoption table ran $rows rows, not 12"
 pass "a stray line closes the gate above it instead of feeding it"
 
 # 8h. A second ABANDON of a gate already abandoned is refused on its own line, so
@@ -402,8 +408,15 @@ out=$(run t1 --accept-abandon G1 2>&1); rc=$?
 grep -q '^G1: abandoned - accepted' <<<"$out" || fail "padded gate id was not matched: $out"
 pass "the gate id is read the same way wherever it appears"
 
-# 8j. Trailing whitespace is padding, not part of a value: an EXPECT carrying a
-#     Markdown hard line break still matches the output that contains it.
+# 8j. Whitespace at either end of a value is padding, not part of it: an EXPECT
+#     doubly spaced after its colon, or carrying a Markdown hard line break, still
+#     matches the output that contains it.
+printf -- '- [ ] G1: README mentions hello\n  CHECK:  cat README.md\n  EXPECT:  hello\n  EVIDENCE: pending\n' \
+  > "$GATES"
+out=$(run t1 2>&1); rc=$?
+[ "$rc" -eq 0 ] || fail "a doubled space after the colon should not fail the gate, got $rc: $out"
+grep -q "^G1: satisfied - output contained EXPECT 'hello' " <<<"$out" \
+  || fail "the padding stayed part of the EXPECT value: $out"
 printf -- '- [ ] G1: README mentions hello\n  CHECK: cat README.md  \n  EXPECT: hello  \n  EVIDENCE: pending\n' \
   > "$GATES"
 out=$(run t1 2>&1); rc=$?
@@ -415,7 +428,7 @@ printf -- '- [x] G1: README mentions hello\n  CHECK: cat README.md\n  EXPECT: he
 out=$(run t1 2>&1); rc=$?
 [ "$rc" -eq 1 ] || fail "a tab after pending should not turn it into recorded evidence, got $rc: $out"
 grep -q '^G1: unsatisfied.*ticked by hand' <<<"$out" || fail "the padded pending was read as evidence: $out"
-pass "trailing whitespace pads a value rather than deciding a gate"
+pass "whitespace at either end of a value pads it rather than deciding a gate"
 
 # 8k. A CHECK killed by a signal records 128+signal, the same on either timer
 #     path, so the result never reads a crash as a clean exit.
@@ -434,6 +447,27 @@ grep -q '^G1: unsatisfied.*(exit 139)$' <<<"$out" \
   || fail "the perl fallback recorded the crash as a clean exit: $out"
 grep -q 'exit 139' "$RESULT" || fail "the result file lost the signal exit code: $(cat "$RESULT")"
 pass "a CHECK killed by a signal is recorded as 128+signal on either timer path"
+
+# 8l. A hash does not delete an ABANDON. Commenting one out used to hand the gate
+#     back to the checker, which ran its CHECK and passed it at exit 0 with nothing
+#     reported; the hidden line is now named and the run fails.
+cat > "$GATES" <<'GATES_EOF'
+- [ ] G1: README mentions hello
+  CHECK: cat README.md
+  EXPECT: hello
+  EVIDENCE: pending
+- [ ] G3: the feature we gave up on
+  CHECK: cat README.md
+  EXPECT: hello
+  EVIDENCE: pending
+#ABANDON: G3 upstream removed the feature
+GATES_EOF
+out=$(run t1 --accept-abandon G3 2>&1); rc=$?
+[ "$rc" -eq 1 ] || fail "a commented-out ABANDON should not pass the run, got $rc: $out"
+grep -q '^gates.md:9: parse-error' <<<"$out" || fail "the hidden ABANDON was dropped in silence: $out"
+grep -q ' abandoned=0 accepted=0 .* parse_errors=1 exit=1$' "$RESULT" \
+  || fail "the hidden ABANDON left the summary claiming a clean run: $(tail -1 "$RESULT")"
+pass "commenting out an ABANDON is reported instead of quietly passing its gate"
 
 # 9. No gates.md: explicit no-op, exit 0, no result written.
 mkdir -p "$HOME_DIR/data/t2"

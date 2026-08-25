@@ -24,7 +24,7 @@ Wake, watcher, away-mode, and Relay-specific state mechanics remain with their n
 `AGENTS.md` retains the run-once and read-once operator rules, lock-refusal safety, installation consent, and direct-report recovery boundaries because those facts apply at every session start.
 Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, while persistent-secondmate recovery is owned by `secondmate-provisioning`.
 
-## Task gates (data/<id>/gates.md and data/<id>/gates-result.md)
+## Task gates (`data/<id>/gates.md` and `data/<id>/gates-result.md`)
 
 A task may carry an acceptance-gate file at `data/<id>/gates.md`, written by Firstmate at intake, next to the task's brief.
 `bin/fm-gates-check.sh <id>` runs every `CHECK:` inside the task's isolated copy resolved from `worktree=` in `state/<id>.meta`, under a per-command timeout, and writes the verdicts to `data/<id>/gates-result.md`.
