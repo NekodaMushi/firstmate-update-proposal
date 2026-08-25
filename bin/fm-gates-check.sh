@@ -53,8 +53,12 @@
 # A line whose trimmed form starts with ABANDON, CHECK:, EXPECT:, or EVIDENCE: is held
 # to that shape for the same reason.
 # EVIDENCE: pending is the literal the intake writes, compared ignoring case and
-# surrounding whitespace; a gate with no EVIDENCE line at all counts as pending
-# too, since a missing line backs a tick even less than a pending one.
+# surrounding whitespace, and a value whose first word is pending reads the same
+# way, so "pending CI" and "pending (see #4)" refuse a hand tick exactly as the
+# bare literal does; a human who says why evidence is still missing has not
+# thereby supplied it. The word must end there: "pendings" is a different word
+# and carries no such meaning. A gate with no EVIDENCE line at all counts as
+# pending too, since a missing line backs a tick even less than a pending one.
 # Any other value is treated as evidence already recorded elsewhere and does not
 # change the verdict here.
 # A CR at the end of a line is stripped, so a CRLF gates.md parses like any other.
@@ -104,13 +108,24 @@
 #   1 at least one gate unsatisfied, or an abandoned gate not accepted, or an
 #     ABANDON naming an unknown gate, a gates.md that declares no gate at all, or
 #     a line that does not match the format.
-#   2 usage error, unreadable meta or copy, or no worktree= in the meta.
+#   2 usage error, a task id that is not a plain name, an unreadable meta or
+#     copy, or no worktree= in the meta.
 # A task with no data/<id>/gates.md prints "no gates for <id>" and exits 0 without
 # writing gates-result.md: nothing was declared, so nothing is owed.
+#
+# The task id names data/<id>/ and state/<id>.meta, so it is held to a plain name:
+# non-empty, letters, digits, dot, underscore and dash only, never a bare "." and
+# never carrying "..". This script both executes what an id-derived file says and
+# writes back into an id-derived directory, so an id that walks out of the
+# operational home is a usage error rather than a path.
 #
 # Options:
 #   --accept-abandon <id>  accept this abandoned gate's reason (repeatable).
 #   --timeout <seconds>    per-CHECK wall clock; default FM_GATES_TIMEOUT or 120.
+#                          A whole number of seconds greater than zero; leading
+#                          zeros are stripped first, so "0", "00" and "000" are
+#                          all refused rather than reaching timeout(1) as its
+#                          "no timeout" spelling.
 #                          Uses timeout(1) or gtimeout(1) when present, else a
 #                          perl fallback that runs the CHECK in its own process
 #                          group and tears that group down on ALRM, HUP, INT, or
@@ -166,9 +181,16 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$ID" ] || die "usage: fm-gates-check.sh <task-id> [--accept-abandon <gate-id>]... [--timeout <seconds>]"
-case "$TIMEOUT" in
-  ''|*[!0-9]*|0) die "--timeout must be a positive integer, got '$TIMEOUT'" ;;
+case "$ID" in
+  ''|.|*..*|*[!A-Za-z0-9._-]*)
+    die "task id must be a plain name of letters, digits, '.', '_' or '-', got '$ID'" ;;
 esac
+case "$TIMEOUT" in
+  ''|*[!0-9]*) die "--timeout must be a positive integer, got '$TIMEOUT'" ;;
+esac
+TIMEOUT_SECONDS=${TIMEOUT#"${TIMEOUT%%[!0]*}"}
+[ -n "$TIMEOUT_SECONDS" ] || die "--timeout must be a positive integer, got '$TIMEOUT'"
+TIMEOUT=$TIMEOUT_SECONDS
 
 GATES="$DATA/$ID/gates.md"
 RESULT="$DATA/$ID/gates-result.md"
@@ -191,14 +213,19 @@ is_accepted() {
   return 1
 }
 
-# A tick is unbacked while its evidence is still pending, whatever the case or
-# padding, and an absent EVIDENCE line is weaker still, so it counts as pending.
+# A tick is unbacked while its evidence still opens with the word pending, whatever
+# the case, the padding, or what the rest of the line says about why; an absent
+# EVIDENCE line is weaker still, so it counts as pending too.
 evidence_is_pending() {
   local v=$1
   v=${v#"${v%%[![:space:]]*}"}
   v=${v%"${v##*[![:space:]]}"}
   [ -n "$v" ] || return 0
-  [ "$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')" = pending ]
+  v=$(printf '%s' "$v" | tr '[:upper:]' '[:lower:]')
+  case "$v" in
+    pending|pending[![:alnum:]_]*) return 0 ;;
+  esac
+  return 1
 }
 
 # Run one CHECK in the copy with the per-gate timeout; echo its combined output.

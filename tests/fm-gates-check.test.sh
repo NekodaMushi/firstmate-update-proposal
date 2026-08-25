@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Behavior tests for bin/fm-gates-check.sh on a disposable repo: a true gate,
-# a false gate, an abandoned gate, the three hand-ticked shapes (pending, oddly
-# cased pending, no EVIDENCE line at all), a task with no gates.md, a gates.md
+# a false gate, an abandoned gate, the hand-ticked shapes (pending however it is
+# written, no EVIDENCE line at all), a task with no gates.md, a gates.md
 # that declares nothing parseable, a timed-out CHECK through both the timeout(1)
 # and the perl paths, the deciding excerpt, output carrying NUL bytes, the parse
-# errors a hand-edited file can carry, the prose it may carry safely, and the
-# no-write guarantees.
+# errors a hand-edited file can carry, the prose it may carry safely, the task
+# ids and timeout values that are refused outright, and the no-write guarantees.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -126,16 +126,31 @@ grep -q '^satisfied=1 unsatisfied=0 abandoned=1 accepted=1 abandon_unknown=0 unp
   || fail "summary wrong after accept"
 pass "exit code is zero only once every abandon is accepted"
 
-# 6. A hand-ticked box with non-pending evidence is not refused by the tick alone.
-cat > "$GATES" <<'GATES_EOF'
-- [x] G1: README mentions hello
-  CHECK: cat README.md
-  EXPECT: hello
-  EVIDENCE: verified by firstmate on a prior run
-GATES_EOF
-run t1 >/dev/null 2>&1; rc=$?
-[ "$rc" -eq 0 ] || fail "ticked box with recorded evidence and passing CHECK should exit 0, got $rc"
-pass "hand tick is refused only while evidence is pending"
+# 6. A hand tick is judged by its EVIDENCE line: still pending however the word is
+#    elaborated, and the CHECK alone once the line records what was verified.
+rows=0
+while IFS='|' read -r desc evidence want_rc; do
+  case "$desc" in ''|'#'*) continue ;; esac
+  rows=$((rows + 1))
+  printf -- '- [x] G1: README mentions hello\n  CHECK: cat README.md\n  EXPECT: hello\n  EVIDENCE: %s\n' \
+    "$evidence" > "$GATES"
+  out=$(run t1 2>&1); rc=$?
+  [ "$rc" -eq "$want_rc" ] || fail "$desc: expected exit $want_rc, got $rc: $out"
+  if [ "$want_rc" -eq 1 ]; then
+    grep -q '^G1: unsatisfied.*ticked by hand' <<<"$out" || fail "$desc: the tick was inherited: $out"
+  else
+    grep -q '^G1: satisfied' <<<"$out" || fail "$desc: recorded evidence was read as pending: $out"
+  fi
+done <<TABLE
+evidence recorded on a prior run|verified by firstmate on a prior run|0
+the bare pending literal|pending|1
+pending with a reason|pending CI|1
+pending with a parenthetical|pending (see #4)|1
+pending said at length|pending manual verification by the reviewer|1
+a longer word that merely starts with those letters|pendings were cleared by hand|0
+TABLE
+[ "$rows" -eq 6 ] || fail "the evidence table ran $rows rows, not 6"
+pass "a hand tick is refused while its evidence line still opens with pending"
 
 # 7. A CHECK that exceeds the timeout is unsatisfied, not a hang.
 cat > "$GATES" <<'GATES_EOF'
@@ -400,5 +415,81 @@ echo "project=x" > "$HOME_DIR/state/t3.meta"
 run t3 >/dev/null 2>&1; rc=$?
 [ "$rc" -eq 2 ] || fail "meta without worktree= should exit 2, got $rc"
 pass "unresolvable copy is a usage error"
+
+# 10b. The task id names data/<id>/ and state/<id>.meta, so an id that is not a
+#      plain name is refused before any file is read or any CHECK is run.
+mkdir -p "$HOME_DIR/escape"
+printf -- '- [ ] G1: escapes the operational home\n  CHECK: touch %s/escaped.txt; echo done\n  EXPECT: done\n  EVIDENCE: pending\n' \
+  "$TMP_ROOT" > "$HOME_DIR/escape/gates.md"
+echo "worktree=$REPO" > "$HOME_DIR/escape.meta"
+out=$(run ../escape 2>&1); rc=$?
+[ "$rc" -eq 2 ] || fail "a traversing task id should exit 2, got $rc: $out"
+[ ! -e "$TMP_ROOT/escaped.txt" ] || fail "a traversing task id ran a CHECK from outside the home"
+[ ! -e "$HOME_DIR/escape/gates-result.md" ] || fail "a traversing task id wrote a result outside data/"
+
+rows=0
+while IFS='|' read -r desc bad_id; do
+  case "$desc" in ''|'#'*) continue ;; esac
+  rows=$((rows + 1))
+  out=$(run "$bad_id" 2>&1); rc=$?
+  [ "$rc" -eq 2 ] || fail "$desc: expected exit 2, got $rc: $out"
+done <<TABLE
+an absolute path|/etc
+a bare dot|.
+a bare dot-dot|..
+a dot-dot segment that lands back inside|t1/../t1
+a nested path|sub/t1
+an id carrying whitespace|t 1
+TABLE
+[ "$rows" -eq 6 ] || fail "the task id table ran $rows rows, not 6"
+pass "a task id that is not a plain name is a usage error"
+
+# 10c. The per-CHECK wall clock cannot be switched off through the value: every
+#      spelling of zero is refused, from the flag and from the environment, and a
+#      value written with leading zeros is read as the number it spells.
+cat > "$GATES" <<'GATES_EOF'
+- [ ] G1: slow
+  CHECK: sleep 5; echo done
+  EXPECT: done
+  EVIDENCE: pending
+GATES_EOF
+rm -f "$RESULT"
+rows=0
+while IFS='|' read -r desc value; do
+  case "$desc" in ''|'#'*) continue ;; esac
+  rows=$((rows + 1))
+  start=$(date +%s)
+  out=$(run t1 --timeout "$value" 2>&1); rc=$?
+  elapsed=$(( $(date +%s) - start ))
+  [ "$rc" -eq 2 ] || fail "$desc: --timeout '$value' should exit 2, got $rc: $out"
+  [ "$elapsed" -lt 4 ] || fail "$desc: --timeout '$value' ran the CHECK anyway (${elapsed}s)"
+  [ ! -e "$RESULT" ] || fail "$desc: --timeout '$value' wrote a result file"
+done <<TABLE
+zero|0
+zero written twice|00
+zero written three times|000
+not a number|abc
+a fraction|1.5
+nothing at all|
+TABLE
+[ "$rows" -eq 6 ] || fail "the timeout table ran $rows rows, not 6"
+
+start=$(date +%s)
+out=$(FM_GATES_TIMEOUT=00 run t1 2>&1); rc=$?
+elapsed=$(( $(date +%s) - start ))
+[ "$rc" -eq 2 ] || fail "FM_GATES_TIMEOUT=00 should exit 2, got $rc: $out"
+[ "$elapsed" -lt 4 ] || fail "FM_GATES_TIMEOUT=00 ran the CHECK anyway (${elapsed}s)"
+[ ! -e "$RESULT" ] || fail "FM_GATES_TIMEOUT=00 wrote a result file"
+
+cat > "$GATES" <<'GATES_EOF'
+- [ ] G1: README mentions hello
+  CHECK: cat README.md
+  EXPECT: hello
+  EVIDENCE: pending
+GATES_EOF
+out=$(run t1 --timeout 0060 2>&1); rc=$?
+[ "$rc" -eq 0 ] || fail "a padded but positive timeout should be accepted, got $rc: $out"
+grep -q '^timeout: 60$' "$RESULT" || fail "the padded timeout was not read as 60: $(grep '^timeout:' "$RESULT")"
+pass "every spelling of a zero timeout is refused, and leading zeros are just padding"
 
 echo "all fm-gates-check tests passed"
