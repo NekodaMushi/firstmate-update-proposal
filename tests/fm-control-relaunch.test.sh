@@ -107,6 +107,7 @@ case "${1:-}" in
     for a in "$@"; do
       case "$a" in
         *cursor_y*) printf '1\n'; exit 0 ;;
+        *pane_pid*) printf '%s\n' "${FM_FAKE_PANE_PID:-4242}"; exit 0 ;;
         *pane_current_command*)
           if [ -f "$D/reap-countdown" ]; then
             n=$(cat "$D/reap-countdown")
@@ -144,6 +145,39 @@ SH
 exit 0
 SH
   chmod +x "$fb/sleep"
+
+  # The production pane topology: tmux's pane shell plus the `treehouse get`
+  # subshell every task runs inside. No harness remains once the agent has
+  # stopped, so this is the bare shell the relaunch handoff must accept.
+  cat > "$fb/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+pane_pid=${FM_FAKE_PANE_PID:-4242}
+subshell_pid=$((pane_pid + 1))
+emit_rows() {  # <with-args>
+  if [ "$1" = 1 ]; then
+    printf '%s 1 /bin/zsh\n' "$pane_pid"
+    printf '%s %s -zsh\n' "$subshell_pid" "$pane_pid"
+    [ "${FM_FAKE_ORPHANED_AGENT:-0}" != 1 ] \
+      || printf '%s %s /home/fake/.local/bin/claude --resume\n' "$((pane_pid + 2))" "$subshell_pid"
+    [ "${FM_FAKE_UNRELATED_CHILD:-0}" != 1 ] \
+      || printf '%s %s git commit -m claude wrote this\n' "$((pane_pid + 3))" "$subshell_pid"
+  else
+    printf '%s 1\n' "$pane_pid"
+    printf '%s %s\n' "$subshell_pid" "$pane_pid"
+    [ "${FM_FAKE_ORPHANED_AGENT:-0}" != 1 ] || printf '%s %s\n' "$((pane_pid + 2))" "$subshell_pid"
+    [ "${FM_FAKE_UNRELATED_CHILD:-0}" != 1 ] || printf '%s %s\n' "$((pane_pid + 3))" "$subshell_pid"
+  fi
+}
+case "$*" in
+  *"-axo pid=,ppid=,args="*) emit_rows 1; exit 0 ;;
+  *"-axo pid=,ppid="*) emit_rows 0; exit 0 ;;
+  *"-o comm="*) printf 'zsh\n'; exit 0 ;;
+  *"-o stat="*) printf 'Ss\n'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fb/ps"
 }
 
 # new_case <name> [id] -> echoes a case dir with a live claude ship task.

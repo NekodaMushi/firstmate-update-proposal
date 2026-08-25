@@ -346,37 +346,91 @@ EOF
   esac
 }
 
-# fm_backend_tmux_shell_ready: the tmux half of fm_backend_shell_ready. The
-# pane's own process IS its shell (`#{pane_pid}` is what tmux spawned for the
-# pane), so the proof is that this exact pid is a lone idle shell with no child
-# of any kind - which covers the one case the foreground-group classifier above
-# deliberately cannot see, a harness left running in the pane's BACKGROUND.
-# When ps cannot answer (a restricted container, a foreign process namespace),
-# fall back to the pane's own foreground command: a shell there is weaker
-# evidence than an empty child list, but it is still a positive, PS1-independent
-# reading from the backend, and refusing every relaunch on a host without a
-# usable ps would strand exactly the wedged workers this path exists to rescue.
-fm_backend_tmux_shell_ready() {  # <target>
-  local target=$1 pane_pid proof comm
-  pane_pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || pane_pid=
-  pane_pid=$(printf '%s' "$pane_pid" | tr -d '[:space:]')
-  proof=$(fm_backend_pid_is_lone_idle_shell "$pane_pid") && {
-    printf '%s' "$proof"
-    return 0
-  }
-  case "$proof" in
-    shell-has-child|foreground-not-shell|shell-not-idle)
-      printf '%s' "$proof"
-      return 1
-      ;;
+# fm_backend_tmux_pid_tree_argv0s: the argv[0] of every process the subtree
+# rooted at <pid> owns, one per line, EXCLUDING <pid> itself. Reads argv[0]
+# rather than `comm` because Linux truncates comm to 15 characters, which would
+# silently shorten exactly the version-suffixed harness names the vocabulary
+# below identifies (muse-bin-<version>), and reads only the FIRST token of the
+# command line so a harness name appearing as an ARGUMENT (`git commit -m
+# 'claude review'`) can never be mistaken for a running harness.
+# Returns 1 with no output when the process table cannot be read or does not
+# contain <pid>: a tree that cannot be seen is never reported as empty.
+fm_backend_tmux_pid_tree_argv0s() {  # <pid>
+  local pid=$1 ps_bin rows
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;
   esac
+  ps_bin=${FM_TMUX_PS_BIN:-ps}
+  command -v "$ps_bin" >/dev/null 2>&1 || return 1
+  rows=$(LC_ALL=C "$ps_bin" -axo pid=,ppid=,args= 2>/dev/null) || return 1
+  [ -n "$rows" ] || return 1
+  printf '%s\n' "$rows" | LC_ALL=C awk -v root="$pid" '
+    {
+      n++
+      pids[n] = $1
+      parents[n] = $2
+      argv0s[n] = $3
+      if ($1 == root) seen = 1
+    }
+    END {
+      if (!seen) exit 1
+      inTree[root] = 1
+      changed = 1
+      while (changed) {
+        changed = 0
+        for (i = 1; i <= n; i++) {
+          if (!inTree[pids[i]] && inTree[parents[i]]) {
+            inTree[pids[i]] = 1
+            changed = 1
+          }
+        }
+      }
+      for (i = 1; i <= n; i++) {
+        if (inTree[pids[i]] && pids[i] != root && argv0s[i] != "") print argv0s[i]
+      }
+    }
+  '
+}
+
+# fm_backend_tmux_shell_ready: the tmux half of fm_backend_shell_ready, decided
+# entirely by process identity.
+# `#{pane_current_command}` is tmux's own resolution of the pane tty's
+# foreground process, so a shell there means the pane is at a prompt - the
+# treehouse subshell every task pane runs inside answers this exactly as the
+# top-level shell would.
+# `#{pane_pid}` is the shell tmux spawned for the pane, and nothing the task
+# started can escape its subtree, so walking that subtree is what catches the
+# case the foreground-group classifier deliberately cannot see: a harness left
+# running in the pane's BACKGROUND.
+# An unreadable pane pid or process table refuses rather than guessing: this
+# proof runs after the old agent has already been stopped, and launching a
+# replacement over a harness that is merely invisible would put two agents on
+# one worktree.
+fm_backend_tmux_shell_ready() {  # <target>
+  local target=$1 pane_pid comm argv0s argv0
   comm=$(fm_backend_tmux_current_command "$target") || comm=
   [ -n "$comm" ] || { printf 'pane-command-unreadable'; return 1; }
   case "$(fm_backend_tmux_classify_process_name "$comm")" in
-    shell) printf 'pane-command-shell'; return 0 ;;
+    shell) ;;
+    agent) printf 'foreground-agent'; return 1 ;;
+    *) printf 'foreground-not-shell'; return 1 ;;
   esac
-  printf 'pane-command-not-shell'
-  return 1
+  pane_pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || pane_pid=
+  pane_pid=$(printf '%s' "$pane_pid" | tr -d '[:space:]')
+  argv0s=$(fm_backend_tmux_pid_tree_argv0s "$pane_pid") || {
+    printf 'process-tree-unreadable'
+    return 1
+  }
+  while IFS= read -r argv0; do
+    [ -n "$argv0" ] || continue
+    if [ "$(fm_backend_tmux_classify_process_name "$argv0" "$argv0")" = agent ]; then
+      printf 'agent-in-pane-tree'
+      return 1
+    fi
+  done <<EOF
+$argv0s
+EOF
+  printf 'foreground-shell-no-agent'
 }
 
 # Backward-compatible three-state view for callers that only need a yes/no

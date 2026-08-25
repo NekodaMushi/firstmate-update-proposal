@@ -1937,20 +1937,44 @@ fm_backend_herdr_agent_state() {  # <target>
   esac
 }
 
-# fm_backend_herdr_shell_ready: the Herdr half of fm_backend_shell_ready.
-# fm_backend_herdr_agent_state answers from the agent REGISTRY, so a pane whose
-# agent record is gone can still be running something; the idle-shell proof
-# above is the process-level answer and already owns the settle retry, so this
-# is a thin adapter over it.
+# fm_backend_herdr_shell_ready: the Herdr half of fm_backend_shell_ready,
+# answered from this backend's own process-info view rather than a borrowed one.
+#
+# It deliberately does NOT reuse fm_backend_herdr_pane_idle_shell_pid above.
+# That proof demands the pane's own creation shell be the sole foreground
+# process with no child at all, which is right for closing a husk pane but is
+# never true of a task pane: fm-spawn.sh runs `treehouse get`, and every task
+# then lives inside that foreground SUBSHELL - the same subshell
+# fm_backend_herdr_current_path exists to follow.
+# The question here is identity, not depth: every foreground process must be a
+# recognized shell, so the pane is at a prompt rather than running a program.
+# "No live agent" is already established by the caller through
+# fm_backend_herdr_agent_state, which reads Herdr's agent registry for this exact
+# pane; an unreadable process view refuses rather than guessing.
 fm_backend_herdr_shell_ready() {  # <target>
+  local info names name
   fm_backend_herdr_parse_target "$1" || { printf 'unreadable'; return 1; }
-  if fm_backend_herdr_pane_idle_shell_pid \
-      "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" >/dev/null 2>&1; then
-    printf 'idle-shell'
-    return 0
-  fi
-  printf 'no-idle-shell'
-  return 1
+  info=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" \
+    pane process-info --pane "$FM_BACKEND_HERDR_PANE" 2>/dev/null) \
+    || { printf 'process-info-unreadable'; return 1; }
+  names=$(printf '%s' "$info" | jq -r '
+    .result.process_info.foreground_processes[]?
+    | (.argv0 // (.argv[0]? ) // .name)
+    | select(type == "string" and length > 0)
+  ' 2>/dev/null) || names=
+  [ -n "$names" ] || { printf 'process-info-unreadable'; return 1; }
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    name=${name##*/}
+    name=${name#-}
+    case "$name" in
+      sh|bash|zsh|dash|ash|ksh|mksh|tcsh|csh|fish) ;;
+      *) printf 'foreground-not-shell'; return 1 ;;
+    esac
+  done <<EOF
+$names
+EOF
+  printf 'foreground-shell'
 }
 
 # Backward-compatible three-state view for callers that only need a yes/no

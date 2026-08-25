@@ -353,9 +353,9 @@ rendered_prompt_hint() {
 # wait_bare_shell proves both halves of the relaunch handoff, entirely from
 # process state read through the recorded backend: the recovery-grade classifier
 # sees no agent in the endpoint's foreground, and the endpoint separately proves
-# it is sitting at its own shell with no child process left behind it. Nothing
-# here reads the rendered screen, because a shell prompt is whatever PS1 draws
-# and no glyph vocabulary can decide readiness for every operator.
+# that its foreground is a shell and that nothing it owns is a live agent.
+# Nothing here reads the rendered screen, because a shell prompt is whatever PS1
+# draws and no glyph vocabulary can decide readiness for every operator.
 # Prints the proof token on success and the blocking state on timeout.
 wait_bare_shell() {  # <timeout>
   local timeout=$1 state proof elapsed=0

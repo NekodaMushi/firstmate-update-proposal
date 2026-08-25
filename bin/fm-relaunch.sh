@@ -18,9 +18,12 @@
 # bin/fm-control.sh, whose exit path sends the recorded adapter's command through
 # bin/fm-send.sh and whose launch path calls bin/fm-spawn.sh --relaunch.
 # That path waits a bounded time for the endpoint to prove, from process state
-# read through the recorded backend, that no agent remains and the pane is back
-# at its own shell with no child of its own, before it uses fm-spawn's exact
-# recorded-adapter launch template in the existing worktree.
+# read through the recorded backend, that no agent remains and its foreground is
+# a shell, before it uses fm-spawn's exact recorded-adapter launch template in
+# the existing worktree.
+# The pane is normally several shells deep - every task runs inside `treehouse
+# get`'s subshell - so that proof asks what the pane's processes ARE, never how
+# many of them there are.
 # The proof never reads the rendered prompt: what a ready shell looks like is
 # whatever the operator's PS1 draws.
 #

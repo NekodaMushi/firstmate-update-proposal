@@ -139,22 +139,36 @@ exit 0
 SH
   chmod +x "$fb/sleep"
 
-  # The pane's process table. FM_FAKE_SHELL_CHILD models the one state the
-  # foreground-command classifier cannot see: the pane is back at its shell, but
-  # something is still running underneath it.
+  # The pane's process table, modelling the production topology every
+  # treehouse-backed task pane has: tmux's pane shell, the `treehouse get`
+  # subshell the task actually runs in, and - while an agent is up - the harness
+  # under that subshell. A stopped agent leaves the two-shell chain behind, which
+  # is a bare shell; FM_FAKE_ORPHANED_AGENT leaves a live harness under it, which
+  # is not.
   cat > "$fb/ps" <<'SH'
 #!/usr/bin/env bash
 set -u
-D=$FM_FAKE_DIR
 pane_pid=${FM_FAKE_PANE_PID:-4242}
-args="$*"
-case "$args" in
-  *"-axo pid=,ppid="*)
+subshell_pid=$((pane_pid + 1))
+emit_rows() {  # <with-args>
+  if [ "$1" = 1 ]; then
+    printf '%s 1 /bin/zsh\n' "$pane_pid"
+    printf '%s %s -zsh\n' "$subshell_pid" "$pane_pid"
+    [ "${FM_FAKE_ORPHANED_AGENT:-0}" != 1 ] \
+      || printf '%s %s /home/fake/.local/bin/claude --resume\n' "$((pane_pid + 2))" "$subshell_pid"
+    [ "${FM_FAKE_UNRELATED_CHILD:-0}" != 1 ] \
+      || printf '%s %s git commit -m claude wrote this\n' "$((pane_pid + 3))" "$subshell_pid"
+  else
     printf '%s 1\n' "$pane_pid"
-    [ "${FM_FAKE_SHELL_CHILD:-0}" != 1 ] || printf '9999 %s\n' "$pane_pid"
-    exit 0
-    ;;
-  *"-o comm="*) cat "$D/command"; printf '\n'; exit 0 ;;
+    printf '%s %s\n' "$subshell_pid" "$pane_pid"
+    [ "${FM_FAKE_ORPHANED_AGENT:-0}" != 1 ] || printf '%s %s\n' "$((pane_pid + 2))" "$subshell_pid"
+    [ "${FM_FAKE_UNRELATED_CHILD:-0}" != 1 ] || printf '%s %s\n' "$((pane_pid + 3))" "$subshell_pid"
+  fi
+}
+case "$*" in
+  *"-axo pid=,ppid=,args="*) emit_rows 1; exit 0 ;;
+  *"-axo pid=,ppid="*) emit_rows 0; exit 0 ;;
+  *"-o comm="*) printf 'zsh\n'; exit 0 ;;
   *"-o stat="*) printf 'Ss\n'; exit 0 ;;
 esac
 exit 1
@@ -203,7 +217,8 @@ run_relaunch() {  # <case-dir> <id>
     FM_SPAWN_NO_GUARD=1 FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.03 \
     FM_CONTROL_LAUNCH_WAIT=0.03 FM_SEND_SETTLE=0 \
     FM_FAKE_STARSHIP_PROMPT="${FM_FAKE_STARSHIP_PROMPT:-0}" \
-    FM_FAKE_SHELL_CHILD="${FM_FAKE_SHELL_CHILD:-0}" \
+    FM_FAKE_ORPHANED_AGENT="${FM_FAKE_ORPHANED_AGENT:-0}" \
+    FM_FAKE_UNRELATED_CHILD="${FM_FAKE_UNRELATED_CHILD:-0}" \
     FM_FAKE_RUN_ACTIVE="${FM_FAKE_RUN_ACTIVE:-0}" \
     FM_FAKE_RUN_PARKED="${FM_FAKE_RUN_PARKED:-0}" \
     FM_FAKE_RUN_CHECKS_PASSED="${FM_FAKE_RUN_CHECKS_PASSED:-0}" \
@@ -235,14 +250,37 @@ test_successful_relaunch_preserves_the_same_worktree() {
 test_refuses_when_the_pane_never_becomes_a_bare_shell() {
   local dir out rc
   dir=$(new_case never-bare rr2)
-  out=$(FM_FAKE_SHELL_CHILD=1 run_relaunch "$dir" rr2); rc=$?
-  expect_code 1 "$rc" "a pane whose shell still has a child must refuse"
+  out=$(FM_FAKE_ORPHANED_AGENT=1 run_relaunch "$dir" rr2); rc=$?
+  expect_code 1 "$rc" "a harness still running under the pane must refuse"
   assert_contains "$out" "did not become a verifiable bare shell" \
     "the refusal should name the unproven shell readiness, not the agent exit"
   assert_no_grep 'encode launch-brief' "$dir/fake/literal" "a replacement must not launch before bare-shell proof"
   [ "$(cat "$dir/fake/command")" = zsh ] \
-    || fail "this fixture must prove the agent left the foreground, so only the child proof is missing"
-  pass "fm-relaunch: refuses without launching while the endpoint's shell still owns a child process"
+    || fail "this fixture must put a shell in the foreground, so only the process tree is unclean"
+  pass "fm-relaunch: refuses without launching while a harness is still alive under the pane"
+}
+
+test_relaunches_over_the_treehouse_subshell_chain() {
+  local dir out rc before after
+  dir=$(new_case subshell rr9)
+  before=$(git -C "$dir/worktree" rev-parse HEAD)
+  out=$(run_relaunch "$dir" rr9); rc=$?
+  expect_code 0 "$rc" "the pane shell plus its treehouse subshell is a bare shell"$'\n'"$out"
+  after=$(git -C "$dir/worktree" rev-parse HEAD)
+  [ "$before" = "$after" ] || fail "relaunch changed the worktree HEAD"
+  assert_grep 'encode launch-brief' "$dir/fake/literal" \
+    "the production subshell topology must not be mistaken for a busy pane"
+  pass "fm-relaunch: the pane's own treehouse subshell chain still counts as a bare shell"
+}
+
+test_relaunches_when_a_child_only_mentions_a_harness_in_its_arguments() {
+  local dir out rc
+  dir=$(new_case argmention rr10)
+  out=$(FM_FAKE_UNRELATED_CHILD=1 run_relaunch "$dir" rr10); rc=$?
+  expect_code 0 "$rc" "a harness name in an argument is not a running harness"$'\n'"$out"
+  assert_grep 'encode launch-brief' "$dir/fake/literal" \
+    "only argv[0] identifies a process, so an argument must never block a relaunch"
+  pass "fm-relaunch: a harness name in a child's arguments does not block the handoff"
 }
 
 test_relaunches_under_an_exotic_shell_prompt() {
@@ -319,6 +357,8 @@ test_refuses_while_a_no_mistakes_run_owns_the_branch() {
 
 test_successful_relaunch_preserves_the_same_worktree
 test_refuses_when_the_pane_never_becomes_a_bare_shell
+test_relaunches_over_the_treehouse_subshell_chain
+test_relaunches_when_a_child_only_mentions_a_harness_in_its_arguments
 test_relaunches_under_an_exotic_shell_prompt
 test_refuses_an_empty_relaunch_note
 test_refuses_a_secondmate_task
