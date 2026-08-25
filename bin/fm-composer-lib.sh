@@ -454,6 +454,32 @@ EOF
   return 1
 }
 
+# fm_composer_row_is_shell_prompt: 0 when <row> is a rendered LOGIN-SHELL prompt
+# row - what a pane draws once its agent has exited - rather than agent output.
+# This is the owner-side judgement for callers that must prove a pane is back to
+# a bare shell (bin/fm-control.sh's relaunch handoff); it reaches the glyph
+# tables above rather than respelling them, so the dead-shell rule and the
+# agent-glyph rule cannot drift apart in a caller.
+# A row that STARTS with an agent prompt glyph is that agent's own composer -
+# claude's leftover `❯` is the exact stale-agent shape this must reject - and a
+# shell prompt is recognised by the glyph that terminates it.
+fm_composer_row_is_shell_prompt() {  # <row>
+  local row=$1 glyph
+  row=$(printf '%s' "$row" | fm_composer_strip_ansi | tr -d '\r')
+  fm_composer_normalize_trim_var row
+  [ -n "$row" ] || return 1
+  fm_composer_leading_agent_glyph_var glyph "$row" && return 1
+  while IFS= read -r glyph; do
+    [ -n "$glyph" ] || continue
+    case "$row" in
+      *"$glyph") return 0 ;;
+    esac
+  done <<EOF
+$FM_COMPOSER_SHELL_PROMPT_GLYPHS
+EOF
+  return 1
+}
+
 fm_composer_idle_matches() {
   local content=$1 idle_re=$2 idle_case=$3
   [ -n "$idle_re" ] || return 1

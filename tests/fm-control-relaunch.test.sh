@@ -72,6 +72,14 @@ case "${1:-}" in
       printf '%s\n' "$payload" >> "$D/literal"
       case "$payload" in
         /exit|/quit)
+          # FM_FAKE_EXIT_REAP_DELAY models the real race: the send fails its
+          # read-back because the exit already destroyed the composer, while the
+          # exiting process has not been reaped yet, so the very next
+          # agent-state probe still reports the agent alive.
+          if [ -n "${FM_FAKE_EXIT_REAP_DELAY:-}" ]; then
+            printf '%s' "$FM_FAKE_EXIT_REAP_DELAY" > "$D/reap-countdown"
+            exit 1
+          fi
           printf 'zsh' > "$D/command"
           [ -z "${FM_FAKE_EXIT_TRANSPORT_FAIL_AFTER_STOP:-}" ] || exit 1
           ;;
@@ -99,7 +107,17 @@ case "${1:-}" in
     for a in "$@"; do
       case "$a" in
         *cursor_y*) printf '1\n'; exit 0 ;;
-        *pane_current_command*) cat "$D/command"; printf '\n'; exit 0 ;;
+        *pane_current_command*)
+          if [ -f "$D/reap-countdown" ]; then
+            n=$(cat "$D/reap-countdown")
+            if [ "$n" -le 0 ]; then
+              printf 'zsh' > "$D/command"
+              rm -f "$D/reap-countdown"
+            else
+              printf '%s' "$((n - 1))" > "$D/reap-countdown"
+            fi
+          fi
+          cat "$D/command"; printf '\n'; exit 0 ;;
         *pane_current_path*)
           if [ -n "${FM_FAKE_CWD_RACE_READY:-}" ]; then
             : > "$FM_FAKE_CWD_RACE_READY"
@@ -1005,6 +1023,21 @@ test_stop_transport_failure_reconciles_a_dead_agent() {
   pass "fm-control relaunch: a verified exit postcondition resolves an ambiguous transport result"
 }
 
+test_stop_reconciles_an_unread_verdict_before_the_agent_is_reaped() {
+  local dir out rc
+  dir=$(new_case reaprace rl26)
+  add_ship_task "$dir" rl26 claude
+  out=$(FM_FAKE_EXIT_REAP_DELAY=1 \
+    run_control "$dir" rl26 relaunch --note "survive the reap race"); rc=$?
+  expect_code 0 "$rc" "an unread submit verdict must defer to the bounded agent-state proof"$'\n'"$out"
+  [ "$(cat "$dir/fake/command")" = claude ] \
+    || fail "the replacement should launch once the exiting agent is actually reaped"
+  [ "$(journal_field "$dir" rl26 phase)" = complete ] \
+    || fail "the journal should record the replacement as complete"
+  assert_contains "$out" "relaunched rl26" "a reconciled exit should still report the relaunch"
+  pass "fm-control relaunch: an exit whose process is not yet reaped is not a transport failure"
+}
+
 test_complete_journal_failure_rolls_back_from_durable_phase() {
   local dir out rc real_mv
   dir=$(new_case completejournal rl27)
@@ -1351,6 +1384,7 @@ test_launch_failure_keeps_the_prior_record_and_reports_it
 test_prepublication_failure_keeps_concurrent_durable_metadata
 test_post_publication_launch_failure_keeps_the_new_record
 test_stop_transport_failure_reconciles_a_dead_agent
+test_stop_reconciles_an_unread_verdict_before_the_agent_is_reaped
 test_complete_journal_failure_rolls_back_from_durable_phase
 test_prepublication_abort_retires_replacement_wiring_and_busy_state
 test_journal_records_the_checkpoint_it_proved

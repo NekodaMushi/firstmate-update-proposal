@@ -15,7 +15,7 @@ Use this playbook when the session-start digest reports an ordinary direct repor
 
 Interrupt and stop a worker through `bin/fm-control.sh <task-id> interrupt|exit`, and replace it in the same local copy through `bin/fm-relaunch.sh <task-id>` after writing its required recovery note.
 The control plane resolves the recorded runtime itself, verifies each action, and never tears down or discards anything ([`docs/agent-control.md`](../../../docs/agent-control.md)).
-That plane covers workers running in this home; a remotely placed secondmate is refused by name and reconciled through `secondmate-provisioning` instead.
+`bin/fm-relaunch.sh` covers ship and scout workers only, because only their instructions are rewritten to carry the note pointer; every secondmate is refused by name and reconciled through `secondmate-provisioning` instead.
 Load `harness-adapters` before a resume command or a harness-specific skill invocation, and whenever the adapter's own quirks matter.
 The target window's harness is recorded as `harness=` in `state/<id>.meta`.
 
@@ -36,7 +36,7 @@ Use `treehouse status` for treehouse-backed tmux, herdr, zellij, or cmux tasks, 
 Do not sweep another home's endpoints or infer ownership from a matching window label.
 
 Before relaunch, prove that no live agent still owns the recorded task and that the existing worktree remains available.
-Write `data/<task-id>/relaunch-note.md` with the branch, unpushed commits, PR if any, active validation run and step, and decisions already made for pending gates.
+Write a non-empty `data/<task-id>/relaunch-note.md` with the branch, unpushed commits, PR if any, active validation run and step, and decisions already made for pending gates.
 Preserve its uncommitted changes and commits, keep the same task identity, and invoke `bin/fm-relaunch.sh <task-id>` so the recorded harness restarts in that existing worktree with the original instructions plus the required note pointer.
 Do not use a fresh generic spawn while the recorded worktree is unaccounted for, because allocating another worktree can split one task across two copies.
 If the worktree or ownership cannot be reconciled safely, leave all state intact and report the task failed or blocked with the conflicting evidence.

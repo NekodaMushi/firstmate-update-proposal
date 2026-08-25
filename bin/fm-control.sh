@@ -334,18 +334,16 @@ wait_agent_state() {  # <timeout> <wanted>...
   return 1
 }
 
-# screen_has_visible_shell_prompt requires the last non-blank rendered row to
-# end in a shell prompt glyph.
-# Old agent output elsewhere in the pane is not proof that the shell is ready.
+# screen_has_visible_shell_prompt asks bin/fm-composer-lib.sh - the one owner of
+# the agent and shell prompt glyph tables - whether the last non-blank rendered
+# row is a login-shell prompt. The glyph sets are never respelled here, so a
+# leftover agent composer row (claude's bare `❯`) can never be mistaken for a
+# ready shell. Old agent output elsewhere in the pane is not proof either.
 screen_has_visible_shell_prompt() {  # <screen>
   local screen=$1 last
   last=$(printf '%s\n' "$screen" | fm_composer_strip_ansi | tr -d '\r' |
     awk 'NF { line=$0 } END { print line }')
-  last=${last%"${last##*[![:space:]]}"}
-  case "$last" in
-    *'>'|*'$'|*'%'|*'#'|*'❯') return 0 ;;
-    *) return 1 ;;
-  esac
+  fm_composer_row_is_shell_prompt "$last"
 }
 
 # wait_bare_shell proves both halves of the relaunch handoff: the recovery-grade
@@ -508,29 +506,29 @@ do_exit() {
   # fm-send owns verified text submission, including the retried Enter needed
   # when a slash-command popup swallows the first one. Addressing the exact
   # recorded endpoint, rather than the task selector, deliberately avoids the
-  # secondmate conversational marker. Submission is not the postcondition: a
-  # successful exit destroys the composer used for read-back, so an
-  # exit-3 delivered-but-unconfirmed result still proceeds to the authoritative
-  # bounded agent-state proof below.
+  # secondmate conversational marker. Submission is not the postcondition.
   send_rc=0
   send_output=$(FM_SEND_RETRIES="$EXIT_RETRIES" FM_SEND_SLEEP="$POLL" FM_SEND_SETTLE=0 \
     "$SCRIPT_DIR/fm-send.sh" "$T" "$cmd" 2>&1) || send_rc=$?
-  case "$send_rc" in
-    0|3) ;;
-    *)
-      # A fast successful exit destroys the composer before fm-send can read
-      # its verdict and can therefore look identical to a failed submit.
-      # Accept that ambiguity only when the recovery-grade process classifier
-      # already proves the requested postcondition.
-      state=$(agent_state)
-      if [ "$state" != dead ]; then
-        [ -z "$send_output" ] || printf '%s\n' "$send_output" >&2
-        die "the exit command could not be sent to task $ID on $BACKEND"
-      fi
-      ;;
-  esac
+  # No send verdict is decisive here, in either direction. A successful exit
+  # destroys the composer fm-send reads its verdict from, so the composer reads
+  # back as a bare shell prompt, which fm-send correctly reports as an
+  # unconfirmed submit (exit 1) rather than as delivery. A single instantaneous
+  # agent-state probe cannot separate that from a real transport failure either,
+  # because the exiting process has not necessarily been reaped yet. So EVERY
+  # send result falls through to the same bounded postcondition below, and a
+  # non-delivered verdict only becomes a transport failure once that bounded
+  # proof has also failed.
   state=$(wait_agent_state "$EXIT_WAIT" dead) || {
-    die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
+    case "$send_rc" in
+      0|3)
+        die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
+        ;;
+      *)
+        [ -z "$send_output" ] || printf '%s\n' "$send_output" >&2
+        die "the exit command could not be sent to task $ID on $BACKEND (agent-state=$state after ${EXIT_WAIT}s)"
+        ;;
+    esac
   }
   # The incarnation is over: retire its busy wiring so no stale record or
   # orphaned generation survives the agent that produced it.
