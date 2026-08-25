@@ -109,7 +109,13 @@ case "${1:-}" in
       esac
     done
     printf 'fakepane\n'; exit 0 ;;
-  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
+  capture-pane)
+    if [ "$(cat "$D/command")" = zsh ]; then
+      printf '$ \n'
+    else
+      printf '╭────╮\n│    │\n╰────╯\n'
+    fi
+    exit 0 ;;
   list-windows) [ -f "$D/windows" ] && cat "$D/windows"; exit 0 ;;
 esac
 exit 0
@@ -987,16 +993,16 @@ test_stop_transport_failure_reconciles_a_dead_agent() {
   add_ship_task "$dir" rl25 claude
   out=$(FM_FAKE_EXIT_TRANSPORT_FAIL_AFTER_STOP=1 \
     run_control "$dir" rl25 relaunch --note "preserve this after stop"); rc=$?
-  expect_code 1 "$rc" "a stop transport failure should fail closed"$'\n'"$out"
-  [ "$(cat "$dir/fake/command")" = zsh ] || fail "the fixture should stop the old agent before reporting transport failure"
-  [ "$(journal_field "$dir" rl25 phase)" = failed:stopping ] \
-    || fail "the journal should retain the pre-stop phase on a partial stop"
-  [ "$(journal_field "$dir" rl25 rollback)" = prior-record-kept-agent-dead ] \
-    || fail "rollback should reconcile the observed dead agent"
-  assert_contains "$out" "no agent is running" "the failure should report the reconciled dead state"
+  expect_code 0 "$rc" "a transport error after the old agent stopped should defer to the verified postcondition"$'\n'"$out"
+  [ "$(cat "$dir/fake/command")" = claude ] \
+    || fail "the replacement should launch after the old agent's exit is independently proven"
+  [ "$(journal_field "$dir" rl25 phase)" = complete ] \
+    || fail "the journal should record the replacement as complete"
+  assert_not_contains "$out" "error: text not sent" \
+    "a verified successful exit must not retain fm-send's provisional transport error"
   assert_grep "preserve this after stop" "$dir/home/data/rl25/brief.md" \
-    "the progress note should survive once the old agent has stopped"
-  pass "fm-control relaunch: partial stop reconciles actual agent state"
+    "the progress note should survive the replacement"
+  pass "fm-control relaunch: a verified exit postcondition resolves an ambiguous transport result"
 }
 
 test_complete_journal_failure_rolls_back_from_durable_phase() {

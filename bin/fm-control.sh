@@ -132,6 +132,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
+# shellcheck source=bin/fm-composer-lib.sh
+. "$SCRIPT_DIR/fm-composer-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
@@ -332,17 +334,31 @@ wait_agent_state() {  # <timeout> <wanted>...
   return 1
 }
 
+# screen_has_visible_shell_prompt requires the last non-blank rendered row to
+# end in a shell prompt glyph.
+# Old agent output elsewhere in the pane is not proof that the shell is ready.
+screen_has_visible_shell_prompt() {  # <screen>
+  local screen=$1 last
+  last=$(printf '%s\n' "$screen" | fm_composer_strip_ansi | tr -d '\r' |
+    awk 'NF { line=$0 } END { print line }')
+  last=${last%"${last##*[![:space:]]}"}
+  case "$last" in
+    *'>'|*'$'|*'%'|*'#'|*'❯') return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # wait_bare_shell proves both halves of the relaunch handoff: the recovery-grade
-# classifier sees no agent process, and the endpoint renders non-empty shell
-# output where its prompt is visible. A dead process verdict without a readable
-# pane is not enough to launch a replacement.
+# classifier sees no agent process, and the endpoint renders a visible shell
+# prompt on its last non-blank row. A dead process verdict with only stale agent
+# output is not enough to launch a replacement.
 wait_bare_shell() {  # <timeout>
   local timeout=$1 state screen elapsed=0
   while :; do
     state=$(agent_state)
     if [ "$state" = dead ]; then
       screen=$(fm_backend_capture "$BACKEND" "$T" 20 "$LABEL" 2>/dev/null || true)
-      if printf '%s\n' "$screen" | grep -q '[^[:space:]]'; then
+      if screen_has_visible_shell_prompt "$screen"; then
         printf '%s' dead
         return 0
       fi
@@ -428,26 +444,26 @@ deliver_interrupt() {
 }
 
 verify_interrupt_running() {
-  local proof after
+  local interrupt_proof after
   fm_backend_target_exists "$BACKEND" "$T" "$LABEL" \
     || die "task $ID's endpoint disappeared while interrupting it; no further control action is safe"
-  proof=endpoint
+  interrupt_proof=endpoint
   if fm_control_backend_state_verified "$BACKEND"; then
     # An interrupt cancels a turn; it must never have stopped the agent. This
     # is the postcondition that separates a landed interrupt from an accident.
     after=$(agent_state)
     [ "$after" = alive ] \
       || die "task $ID's agent is '$after' after its interrupt key; an interrupt must leave the agent running"
-    proof=agent-alive
+    interrupt_proof='agent-alive'
   fi
-  printf '%s' "$proof"
+  printf '%s' "$interrupt_proof"
 }
 
 do_interrupt() {
-  local proof cancel
+  local interrupt_proof cancel
   cancel=$(deliver_interrupt) || return $?
-  proof=$(verify_interrupt_running) || return $?
-  printf '%s cancel=%s' "$proof" "$cancel"
+  interrupt_proof=$(verify_interrupt_running) || return $?
+  printf '%s cancel=%s' "$interrupt_proof" "$cancel"
 }
 
 retire_busy_incarnation() {
@@ -459,7 +475,7 @@ retire_busy_incarnation() {
 # do_exit: stop the running agent, preserving endpoint and worktree. Prints
 # `already-stopped` or `stopped`.
 do_exit() {
-  local state cmd send_rc cancel interrupt_result=not-needed
+  local state cmd send_output send_rc cancel interrupt_result=not-needed
   require_state_verified_backend exit
   state=$(agent_state)
   case "$state" in
@@ -497,11 +513,21 @@ do_exit() {
   # exit-3 delivered-but-unconfirmed result still proceeds to the authoritative
   # bounded agent-state proof below.
   send_rc=0
-  FM_SEND_RETRIES="$EXIT_RETRIES" FM_SEND_SLEEP="$POLL" FM_SEND_SETTLE=0 \
-    "$SCRIPT_DIR/fm-send.sh" "$T" "$cmd" || send_rc=$?
+  send_output=$(FM_SEND_RETRIES="$EXIT_RETRIES" FM_SEND_SLEEP="$POLL" FM_SEND_SETTLE=0 \
+    "$SCRIPT_DIR/fm-send.sh" "$T" "$cmd" 2>&1) || send_rc=$?
   case "$send_rc" in
     0|3) ;;
-    *) die "the exit command could not be sent to task $ID on $BACKEND" ;;
+    *)
+      # A fast successful exit destroys the composer before fm-send can read
+      # its verdict and can therefore look identical to a failed submit.
+      # Accept that ambiguity only when the recovery-grade process classifier
+      # already proves the requested postcondition.
+      state=$(agent_state)
+      if [ "$state" != dead ]; then
+        [ -z "$send_output" ] || printf '%s\n' "$send_output" >&2
+        die "the exit command could not be sent to task $ID on $BACKEND"
+      fi
+      ;;
   esac
   state=$(wait_agent_state "$EXIT_WAIT" dead) || {
     die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
