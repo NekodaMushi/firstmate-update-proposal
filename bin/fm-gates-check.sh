@@ -23,6 +23,11 @@
 # character must not decide a gate quietly. A line either matches one of the three
 # shapes below, is context, or is a parse-error naming its line number; nothing is
 # dropped in silence and nothing lands on a gate that did not declare it.
+# A gates.md carrying any parse error decides nothing. Every error is reported, no
+# CHECK is run, no gate is given a verdict, and the run exits 1. A file the checker
+# cannot read whole must not be allowed to half-decide it, and a gate that merely
+# looks intact beside a broken line has not been shown to be intact. Fix the file and
+# run again; the cost is that the sound gates in a broken file wait for that fix.
 #   gate     at column 0, "- [ ] <id>: <outcome>" or "- [x] <id>: <outcome>" ("X"
 #            counts as ticked). <id> is non-empty, carries no whitespace, and is
 #            declared once in the file.
@@ -60,14 +65,17 @@
 # held to the same shapes: "# Gates for t1" and "## G2 notes" are prose and stay
 # context, while "#- [ ] G2", "## [x] done", "#ABANDON: G3 dropped", the doubled
 # "# #ABANDON: G3 dropped" and "# CHECK: cat README.md" are errors naming their line.
-# gates.md has no comment syntax of its own, so a line whose trimmed form opens with
-# "<!--" is an error whatever it carries.
+# gates.md has no comment syntax of its own, so a line carrying "<!--" or "-->"
+# anywhere in it is an error: at the head of the line, behind a hash, indented, after
+# a gate, or as either delimiter of a block comment. That is what closes the block
+# form, where the delimiters are errors and the rule above then stops the run before
+# anything written between them can be declared or executed.
 # Commenting a line out is how a human deletes it, and a deleted ABANDON turns a gate
 # the author gave up on back into one the checker runs and can pass, so no marker gets
 # to hide a line the format recognises. Withdraw a gate with ABANDON and annotate it
 # with prose that matches no shape. The cost is that a heading opening with one of
-# those four words, "# ABANDON notes", and a genuine "<!-- note to self -->" are
-# errors too.
+# those four words, "# ABANDON notes", a genuine "<!-- note to self -->", and prose
+# that merely quotes "<!--" are errors too.
 # EVIDENCE: pending is the literal the intake writes, compared ignoring case and
 # surrounding whitespace, and a value whose first word is pending reads the same
 # way, so "pending CI" and "pending (see #4)" refuse a hand tick exactly as the
@@ -98,6 +106,8 @@
 #   parse-error a line that is trying to be part of the format and does not match
 #               the grammar above. Reported against gates.md:<line>, never against
 #               a gate, and discarded rather than applied to the nearest gate.
+#   not-checked reported once against the file when it carries any parse error, in
+#               place of every gate verdict: no CHECK ran, so no gate earned one.
 #
 # gates-result.md layout (this header is its single owner):
 #   # Gates result for <id>
@@ -107,6 +117,7 @@
 #   timeout: <seconds per CHECK>
 #   ## <gate-id>: satisfied|unsatisfied|abandoned|abandon-unknown
 #   ## gates.md: unparseable
+#   ## gates.md: not-checked
 #   ## gates.md:<line>: parse-error
 #   reason: <one line: why the verdict was reached>
 #   output: <the excerpt that decided the verdict, fenced, when the CHECK ran:
@@ -123,7 +134,7 @@
 #   0 every gate satisfied, and every abandoned gate accepted on this command line.
 #   1 at least one gate unsatisfied, or an abandoned gate not accepted, or an
 #     ABANDON naming an unknown gate, a gates.md that declares no gate at all, or
-#     a line that does not match the format.
+#     a line that does not match the format, in which case no CHECK ran at all.
 #   2 usage error, a task id that is not a plain name, an unreadable meta or
 #     copy, or no worktree= in the meta.
 # A task with no data/<id>/gates.md prints "no gates for <id>" and exits 0 without
@@ -331,6 +342,12 @@ while IFS= read -r line || [ -n "$line" ]; do
   line=${line%$'\r'}
   trimmed=${line#"${line%%[![:space:]]*}"}
   [ -n "$trimmed" ] || continue
+  case "$trimmed" in
+    *'<!--'*|*'-->'*)
+      parse_error "$lineno" \
+        "HTML comment marker; gates.md has no comment syntax, so no marker hides a line"
+      cur=-1; continue ;;
+  esac
 
   if opens_a_box "$trimmed"; then
     if [ "$trimmed" != "$line" ]; then
@@ -375,10 +392,6 @@ while IFS= read -r line || [ -n "$line" ]; do
   fi
 
   case "$trimmed" in
-    '<!--'*)
-      parse_error "$lineno" \
-        "HTML comment; gates.md has no comment syntax, so nothing here can hide a line"
-      cur=-1; continue ;;
     '#'*)
       uncommented=$trimmed
       while :; do
@@ -546,13 +559,17 @@ for i in "${!PARSE_ERROR_LINES[@]}"; do
   emit "gates.md:${PARSE_ERROR_LINES[$i]}" parse-error "${PARSE_ERROR_MSGS[$i]}"
 done
 
-if [ "${#GATE_IDS[@]}" -eq 0 ]; then
+if [ "$n_parse" -gt 0 ]; then
+  emit gates.md not-checked \
+    "$GATES carries $n_parse parse error(s), so no CHECK was run and no gate was given a verdict; fix the file and run again"
+elif [ "${#GATE_IDS[@]}" -eq 0 ]; then
   n_unparseable=1
   emit gates.md unparseable \
     "$GATES exists but declares no gate line; a file that checks nothing is not a clean pass"
 fi
 
 for i in "${!GATE_IDS[@]}"; do
+  [ "$n_parse" -eq 0 ] || break
   gid=${GATE_IDS[$i]}
   box=${GATE_BOXES[$i]}
   check=${GATE_CHECKS[$i]}
@@ -605,6 +622,7 @@ for i in "${!GATE_IDS[@]}"; do
 done
 
 for i in "${!ABANDON_IDS[@]}"; do
+  [ "$n_parse" -eq 0 ] || break
   aid=${ABANDON_IDS[$i]}
   found=0
   for g in "${GATE_IDS[@]+"${GATE_IDS[@]}"}"; do

@@ -5,9 +5,10 @@
 # that declares nothing parseable, a timed-out CHECK through both the timeout(1)
 # and the perl paths, the deciding excerpt, output carrying NUL bytes, the parse
 # errors a hand-edited file can carry, the prose it may carry safely, the format
-# lines a comment marker cannot hide, the padding it may carry around a value, the
-# exit code of a CHECK killed by a signal, the task ids and timeout values that
-# are refused outright, and the no-write guarantees.
+# lines a comment marker cannot hide, the refusal to decide anything in a file that
+# carries a parse error, the padding it may carry around a value, the exit code of a
+# CHECK killed by a signal, the task ids and timeout values that are refused
+# outright, and the no-write guarantees.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -285,7 +286,14 @@ while IFS='|' read -r desc body errs want_rc; do
   done
   grep -q " parse_errors=$n exit=$want_rc\$" "$RESULT" \
     || fail "$desc: summary does not match the verdict: $(tail -1 "$RESULT")"
-  grep -q '^G1: satisfied' <<<"$out" || fail "$desc: the reference gate lost its own verdict: $out"
+  if [ "$n" -eq 0 ]; then
+    grep -q '^G1: satisfied' <<<"$out" || fail "$desc: the reference gate lost its own verdict: $out"
+  else
+    grep -q '^gates.md: not-checked' <<<"$out" || fail "$desc: a broken file was not reported as undecided: $out"
+    grep -q '^## G1:' "$RESULT" && fail "$desc: a gate was given a verdict in a file with a parse error"
+    grep -q '^satisfied=0 unsatisfied=0 abandoned=0 accepted=0 abandon_unknown=0 unparseable=0 ' "$RESULT" \
+      || fail "$desc: a broken file still counted verdicts: $(tail -1 "$RESULT")"
+  fi
 done <<TABLE
 a file of nothing but valid shapes|$REF||0
 a link bullet is context|- [firstmate#2](https://example.invalid/issues/2)\n$REF||0
@@ -305,6 +313,10 @@ a commented-out field|$REF\n# CHECK: cat README.md|5|1
 a doubled hash marker|$REF\n# #ABANDON: G1 dropped|5|1
 an html comment holding an abandon|$REF\n<!-- ABANDON: G1 dropped -->|5|1
 an html comment holding only prose|$REF\n<!-- a note to the reviewer -->|5|1
+an html comment behind a hash|$REF\n# <!-- ABANDON: G1 dropped -->|5|1
+an html comment opened mid-line|$REF\n- [ ] G2: x <!-- dropped -->|5|1
+a bare block-comment opener|$REF\n<!--|5|1
+a bare block-comment closer|$REF\n-->|5|1
 a heading that only names a gate is context|$REF\n## G2 notes||0
 a comment that only reads as prose is context|$REF\n# G2 was moved to a follow-up||0
 an indented gate line|$REF\n - [ ] G2: x|5|1
@@ -324,13 +336,14 @@ an abandon with no reason|$REF\nABANDON: G1|5|1
 an abandon with no id|$REF\nABANDON:   |5|1
 an id abandoned twice|$REF\nABANDON: G9 dropped\nABANDON: G9 dropped again|6|1
 TABLE
-[ "$rows" -eq 36 ] || fail "the grammar table ran $rows rows, not 36"
+[ "$rows" -eq 40 ] || fail "the grammar table ran $rows rows, not 40"
 pass "the grammar takes its three shapes, ignores context, and reports every slip"
 
 # 8g. A line the checker does not recognise closes the gate above it, so a field
-#     that follows is reported rather than quietly filling that gate's hole. The
-#     reference gate declares CHECK and EVIDENCE but no EXPECT, and its output
-#     contains the stray EXPECT, so an adopted field would flip it to satisfied.
+#     that follows is reported as belonging to no gate rather than quietly filling
+#     that gate's hole. The reference gate declares CHECK and EVIDENCE but no
+#     EXPECT, and its output contains the stray EXPECT, so an adopted field would
+#     leave line 5 unreported and hand G1 a verdict it never earned.
 ADOPT='- [ ] G1: the suite passes with no failures\n  CHECK: echo "3 tests, 2 failures"\n  EVIDENCE: pending'
 rows=0
 while IFS='|' read -r desc stray errs; do
@@ -339,8 +352,9 @@ while IFS='|' read -r desc stray errs; do
   printf '%b\n' "$ADOPT\n$stray\n  EXPECT: 3 tests" > "$GATES"
   out=$(run t1 2>&1 </dev/null); rc=$?
   [ "$rc" -eq 1 ] || fail "$desc: expected exit 1, got $rc: $out"
-  grep -q '^G1: unsatisfied.*no EXPECT line' <<<"$out" \
-    || fail "$desc: G1 was decided on an EXPECT it never declared: $out"
+  grep -q '^gates.md:5: parse-error.*EXPECT line belongs to no gate' <<<"$out" \
+    || fail "$desc: the stray EXPECT was adopted by the gate above it: $out"
+  grep -q '^## G1:' "$RESULT" && fail "$desc: G1 was decided in a file with a parse error"
   n=0
   for e in $errs; do
     n=$((n + 1))
@@ -362,13 +376,15 @@ an abandon inside an html comment|<!-- ABANDON: G9 dropped elsewhere -->|4 5
 an unindented field|CHECK: stray at column zero|4 5
 an indented field missing its space|  EXPECT:nope|4 5
 an indented field with no value|  EXPECT:   |4 5
+an abandon behind a hash and an html comment|# <!-- ABANDON: G9 dropped elsewhere -->|4 5
 TABLE
-[ "$rows" -eq 13 ] || fail "the adoption table ran $rows rows, not 13"
+[ "$rows" -eq 14 ] || fail "the adoption table ran $rows rows, not 14"
 pass "a stray line closes the gate above it instead of feeding it"
 
 # 8h. A second ABANDON of a gate already abandoned is refused on its own line, so
-#     the newer reason cannot be buried behind the older one, and a repeated
-#     ABANDON of a gate that does not exist is still one abandon-unknown.
+#     the newer reason is never buried behind the older one and neither is applied
+#     while the file stays broken. An id can therefore be abandoned at most once,
+#     which is what keeps a repeated unknown id from counting twice.
 cat > "$GATES" <<'GATES_EOF'
 - [ ] G1: ok
   CHECK: cat README.md
@@ -381,8 +397,9 @@ out=$(run t1 --accept-abandon G1 2>&1); rc=$?
 [ "$rc" -eq 1 ] || fail "a repeated ABANDON should exit 1, got $rc: $out"
 grep -q '^gates.md:6: parse-error' <<<"$out" || fail "the second ABANDON was not reported: $out"
 grep -q 'actually shipped' "$RESULT" && fail "the second reason was recorded as if it were accepted"
-grep -q ' abandoned=1 ' "$RESULT" || fail "the repeat inflated the abandon count: $(tail -1 "$RESULT")"
-grep -q ' parse_errors=1 exit=1$' "$RESULT" || fail "summary wrong: $(tail -1 "$RESULT")"
+grep -q '^## G1:' "$RESULT" && fail "a gate was decided while the file carried a parse error"
+grep -q '^satisfied=0 unsatisfied=0 abandoned=0 accepted=0 abandon_unknown=0 unparseable=0 parse_errors=1 exit=1$' "$RESULT" \
+  || fail "summary wrong: $(tail -1 "$RESULT")"
 
 cat > "$GATES" <<'GATES_EOF'
 - [ ] G1: ok
@@ -394,9 +411,9 @@ ABANDON: G9 typo again
 GATES_EOF
 out=$(run t1 2>&1); rc=$?
 [ "$rc" -eq 1 ] || fail "a repeated unknown ABANDON should exit 1, got $rc: $out"
-[ "$(grep -c '^## G9: abandon-unknown' "$RESULT")" -eq 1 ] \
-  || fail "one unknown gate was reported more than once: $(cat "$RESULT")"
-grep -q 'abandon_unknown=1 ' "$RESULT" || fail "the repeat inflated abandon_unknown: $(tail -1 "$RESULT")"
+grep -q '^gates.md:6: parse-error' <<<"$out" || fail "the repeated unknown ABANDON was not reported: $out"
+[ "$(grep -c '^## G9:' "$RESULT")" -eq 0 ] \
+  || fail "an unknown gate was reported while the file carried a parse error: $(cat "$RESULT")"
 pass "an id is abandoned once, and a repeat is reported instead of silently applied"
 
 # 8i. Padding after the checkbox does not change the gate id an ABANDON must name.
@@ -470,9 +487,39 @@ done <<TABLE
 a hash|#ABANDON: G3 upstream removed the feature
 a doubled hash|# #ABANDON: G3 upstream removed the feature
 an html comment|<!-- ABANDON: G3 upstream removed the feature -->
+an html comment behind a hash|# <!-- ABANDON: G3 upstream removed the feature -->
 TABLE
-[ "$rows" -eq 3 ] || fail "the hidden-abandon table ran $rows rows, not 3"
+[ "$rows" -eq 4 ] || fail "the hidden-abandon table ran $rows rows, not 4"
 pass "no comment marker quietly turns an abandoned gate back into a passing one"
+
+# 8m. A block comment cannot smuggle a gate past the checker either. Both of its
+#     delimiters are reported, and because a file with any parse error decides
+#     nothing, the gate written between them is never run and never reaches the
+#     result file.
+cat > "$GATES" <<'GATES_EOF'
+- [ ] G1: README mentions hello
+  CHECK: cat README.md
+  EXPECT: hello
+  EVIDENCE: pending
+<!--
+- [ ] G2: the gate we commented out
+  CHECK: touch ran-g2.txt; cat README.md
+  EXPECT: hello
+  EVIDENCE: pending
+-->
+GATES_EOF
+rm -f "$REPO/ran-g2.txt"
+out=$(run t1 2>&1); rc=$?
+[ "$rc" -eq 1 ] || fail "a block comment should not leave the run passing, got $rc: $out"
+grep -q '^gates.md:5: parse-error' <<<"$out" || fail "the comment opener was not reported: $out"
+grep -q '^gates.md:10: parse-error' <<<"$out" || fail "the comment closer was not reported: $out"
+[ ! -e "$REPO/ran-g2.txt" ] || fail "the CHECK inside the comment was executed"
+grep -q '^## G2:' "$RESULT" && fail "the commented-out gate reached the result file"
+grep -q '^## G1:' "$RESULT" && fail "a gate was decided while the file carried a parse error"
+grep -q '^satisfied=0 unsatisfied=0 abandoned=0 accepted=0 abandon_unknown=0 unparseable=0 parse_errors=2 exit=1$' "$RESULT" \
+  || fail "summary wrong: $(tail -1 "$RESULT")"
+[ -z "$(git -C "$REPO" status --porcelain)" ] || fail "the copy was modified: $(git -C "$REPO" status --porcelain)"
+pass "a block comment declares nothing, runs nothing, and is reported at both ends"
 
 # 9. No gates.md: explicit no-op, exit 0, no result written.
 mkdir -p "$HOME_DIR/data/t2"
