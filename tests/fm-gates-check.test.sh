@@ -508,8 +508,13 @@ a plus glued to the word|+ABANDON: G3 upstream removed the feature
 a number glued to the word|1.ABANDON: G3 upstream removed the feature
 a parenthesised number|1) ABANDON: G3 upstream removed the feature
 a blockquote|> ABANDON: G3 upstream removed the feature
+a blockquote behind a hash|#> ABANDON: G3 upstream removed the feature
+prose behind a hash|# note ABANDON: G3 upstream removed the feature
+a blockquote behind two hashes|## > ABANDON: G3 upstream removed the feature
+a parenthesised number behind a hash|#1) ABANDON: G3 upstream removed the feature
+a blockquote and a bullet behind a hash|#> - ABANDON: G3 upstream removed the feature
 TABLE
-[ "$rows" -eq 16 ] || fail "the hidden-abandon table ran $rows rows, not 16"
+[ "$rows" -eq 21 ] || fail "the hidden-abandon table ran $rows rows, not 21"
 pass "no marker quietly turns an abandoned gate back into a passing one"
 
 # 8m. A block comment cannot smuggle a gate past the checker either. Both of its

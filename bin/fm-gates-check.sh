@@ -384,6 +384,16 @@ demark() {
   DEMARKED=$s
 }
 
+# The one rule every context-discard path enforces: a line the format is about to
+# drop still may not carry an abandon away with it.
+stray_abandon_error() {  # <lineno> <trimmed line>
+  case "$2" in
+    *ABANDON:*)
+      parse_error "$1" \
+        "ABANDON: sits in a line the format does not recognise; it takes 'ABANDON: <gate-id> <reason>' at column 0" ;;
+  esac
+}
+
 # The four keyword shapes, named when <line> is one of them and empty when it is not.
 keyword_shape() {
   case "$1" in
@@ -463,8 +473,12 @@ while IFS= read -r line || [ -n "$line" ]; do
         demark "$uncommented"
         hidden=$(keyword_shape "$DEMARKED")
       fi
-      [ -z "$hidden" ] || parse_error "$lineno" \
-        "commented-out $hidden line; a '#' does not hide a line the format recognises"
+      if [ -n "$hidden" ]; then
+        parse_error "$lineno" \
+          "commented-out $hidden line; a '#' does not hide a line the format recognises"
+      else
+        stray_abandon_error "$lineno" "$trimmed"
+      fi
       cur=-1; continue ;;
   esac
 
@@ -511,11 +525,7 @@ while IFS= read -r line || [ -n "$line" ]; do
       ABANDON_IDS+=("$aid"); ABANDON_REASONS+=("$reason")
       cur=-1; continue ;;
     CHECK:*|EXPECT:*|EVIDENCE:*) ;;
-    *ABANDON:*)
-      parse_error "$lineno" \
-        "ABANDON: sits in a line the format does not recognise; it takes 'ABANDON: <gate-id> <reason>' at column 0"
-      cur=-1; continue ;;
-    *) cur=-1; continue ;;
+    *) stray_abandon_error "$lineno" "$trimmed"; cur=-1; continue ;;
   esac
 
   key=${trimmed%%:*}
