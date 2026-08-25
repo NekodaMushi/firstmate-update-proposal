@@ -346,6 +346,39 @@ EOF
   esac
 }
 
+# fm_backend_tmux_shell_ready: the tmux half of fm_backend_shell_ready. The
+# pane's own process IS its shell (`#{pane_pid}` is what tmux spawned for the
+# pane), so the proof is that this exact pid is a lone idle shell with no child
+# of any kind - which covers the one case the foreground-group classifier above
+# deliberately cannot see, a harness left running in the pane's BACKGROUND.
+# When ps cannot answer (a restricted container, a foreign process namespace),
+# fall back to the pane's own foreground command: a shell there is weaker
+# evidence than an empty child list, but it is still a positive, PS1-independent
+# reading from the backend, and refusing every relaunch on a host without a
+# usable ps would strand exactly the wedged workers this path exists to rescue.
+fm_backend_tmux_shell_ready() {  # <target>
+  local target=$1 pane_pid proof comm
+  pane_pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || pane_pid=
+  pane_pid=$(printf '%s' "$pane_pid" | tr -d '[:space:]')
+  proof=$(fm_backend_pid_is_lone_idle_shell "$pane_pid") && {
+    printf '%s' "$proof"
+    return 0
+  }
+  case "$proof" in
+    shell-has-child|foreground-not-shell|shell-not-idle)
+      printf '%s' "$proof"
+      return 1
+      ;;
+  esac
+  comm=$(fm_backend_tmux_current_command "$target") || comm=
+  [ -n "$comm" ] || { printf 'pane-command-unreadable'; return 1; }
+  case "$(fm_backend_tmux_classify_process_name "$comm")" in
+    shell) printf 'pane-command-shell'; return 0 ;;
+  esac
+  printf 'pane-command-not-shell'
+  return 1
+}
+
 # Backward-compatible three-state view for callers that only need a yes/no
 # agent verdict. The detailed state contract is owned by fm_backend_agent_state.
 fm_backend_tmux_agent_alive() {  # <target>

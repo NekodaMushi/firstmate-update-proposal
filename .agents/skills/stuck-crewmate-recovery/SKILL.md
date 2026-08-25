@@ -50,7 +50,8 @@ Escalate in order:
 3. If the crewmate is confused or looping, interrupt with `FM_HOME=<this-firstmate-home> bin/fm-control.sh <task-id> interrupt`, then redirect with one corrective line through `fm-send`.
 4. If the crewmate is genuinely wedged after redirection, write `data/<task-id>/relaunch-note.md`, then run `FM_HOME=<this-firstmate-home> bin/fm-relaunch.sh <task-id>` to stop the agent and carry the original instructions plus that note pointer into a replacement in the same local copy.
    The command refuses while an active validation response may own the branch, and its header owns the abort-and-custody sequence for that case.
-   Genuine wedging means looping, unresponsive, repeating the same obstacle, truly dead, or exceeding a captain-imposed context ceiling that forbids another steer.
-   A low context reading without such a ceiling is not wedging; modern harnesses auto-compact and keep going.
+   Use `FM_HOME=<this-firstmate-home> bin/fm-control.sh <task-id> relaunch --note '<progress so far>' --harness <adapter>` instead, adding `--model` or `--effort`, when the worker should come back on a different runtime.
+   Genuine wedging means looping, unresponsive, repeating the same obstacle, or truly dead.
+   A low context reading is not wedging; modern harnesses auto-compact and keep going.
    The worktree and commits persist, so relaunch is cheap.
 5. If a second relaunch fails too, write `failed` to the backlog and tell the captain the plain failure, preserved work, and consequence using `AGENTS.md` section 9; do not mention metadata, harness, window, or worktree unless the path itself is needed for action.

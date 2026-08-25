@@ -895,6 +895,69 @@ fm_backend_agent_state() {  # <backend> <target>
   esac
 }
 
+# fm_backend_pid_is_lone_idle_shell: 0 when <pid> is, right now, one lone
+# recognized shell with no child process of its own - the operating-system half
+# of the "this endpoint is back at its own bare shell" proof. It reads the
+# process table rather than the rendered screen on purpose: a prompt is whatever
+# the operator's PS1 draws (starship, powerline, a bare `$`, an RPROMPT), so no
+# glyph vocabulary can decide this, while the process table answers it the same
+# way on every machine.
+# An idle interactive shell transiently hosts short-lived prompt helpers
+# (starship spawns one on every redraw), so a single failed observation means
+# "not proven yet", never "busy forever"; callers poll within their own bounded
+# window. The same rule, expressed against Herdr's own process-info API rather
+# than ps, is owned by fm_backend_herdr_pane_idle_shell_sample.
+# Returns 1 and prints a reason token when the proof fails or ps is unusable, so
+# a caller can record WHY it refused.
+fm_backend_pid_is_lone_idle_shell() {  # <pid>
+  local pid=$1 ps_bin comm rows stat
+  case "$pid" in
+    ''|*[!0-9]*) printf 'no-shell-pid'; return 1 ;;
+  esac
+  ps_bin=${FM_BACKEND_PS_BIN:-ps}
+  command -v "$ps_bin" >/dev/null 2>&1 || { printf 'no-ps'; return 1; }
+  comm=$("$ps_bin" -p "$pid" -o comm= 2>/dev/null) || { printf 'ps-unreadable'; return 1; }
+  comm=$(printf '%s' "$comm" | tr -d '[:space:]')
+  [ -n "$comm" ] || { printf 'ps-unreadable'; return 1; }
+  comm=${comm##*/}
+  comm=${comm#-}
+  case "$comm" in
+    sh|bash|zsh|dash|ash|ksh|mksh|tcsh|csh|fish) ;;
+    *) printf 'foreground-not-shell'; return 1 ;;
+  esac
+  rows=$("$ps_bin" -axo pid=,ppid= 2>/dev/null) || { printf 'ps-unreadable'; return 1; }
+  [ -n "$rows" ] || { printf 'ps-unreadable'; return 1; }
+  printf '%s\n' "$rows" | awk -v shell="$pid" '
+    $1 == shell { found++ }
+    $2 == shell { child++ }
+    END { exit(found == 1 && child == 0 ? 0 : 1) }
+  ' || { printf 'shell-has-child'; return 1; }
+  stat=$("$ps_bin" -p "$pid" -o stat= 2>/dev/null | tr -d '[:space:]') || stat=
+  case "$stat" in
+    ''|S*|I*) ;;
+    *) printf 'shell-not-idle'; return 1 ;;
+  esac
+  printf 'lone-idle-shell'
+}
+
+# fm_backend_shell_ready: 0 when <target>'s endpoint positively proves it is
+# sitting at its own shell with no agent process left behind it. This is the
+# launch precondition for replacing an agent in a recorded endpoint: the
+# recovery-grade classifier above answers "is an agent in the foreground", which
+# a backgrounded harness can still satisfy, so the replacement launch asks this
+# stricter question separately. Prints a proof or reason token either way.
+# Only the two state-verified backends can answer it; every other backend has no
+# process view of its endpoint and prints `unverified`.
+fm_backend_shell_ready() {  # <backend> <target>
+  local backend=$1 target=$2
+  fm_backend_source "$backend" || { printf 'unverified'; return 1; }
+  case "$backend" in
+    tmux) fm_backend_tmux_shell_ready "$target" ;;
+    herdr) fm_backend_herdr_shell_ready "$target" ;;
+    *) printf 'unverified'; return 1 ;;
+  esac
+}
+
 # Backward-compatible three-state view for existing callers. An
 # authoritatively missing endpoint is confidently not a live agent, while every
 # ambiguous, unreadable, or unverified result stays unknown.

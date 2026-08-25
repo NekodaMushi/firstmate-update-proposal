@@ -17,19 +17,23 @@
 # The transactional stop and same-worktree launch are delegated to
 # bin/fm-control.sh, whose exit path sends the recorded adapter's command through
 # bin/fm-send.sh and whose launch path calls bin/fm-spawn.sh --relaunch.
-# That path waits a bounded time for a positively agent-free endpoint with a
-# visible shell prompt before it uses fm-spawn's exact recorded-adapter launch
-# template in the existing worktree.
+# That path waits a bounded time for the endpoint to prove, from process state
+# read through the recorded backend, that no agent remains and the pane is back
+# at its own shell with no child of its own, before it uses fm-spawn's exact
+# recorded-adapter launch template in the existing worktree.
+# The proof never reads the rendered prompt: what a ready shell looks like is
+# whatever the operator's PS1 draws.
 #
 # Only a ship or scout is relaunched here, because only their instructions are
 # rewritten to carry the note pointer.
 # A secondmate keeps a standing charter that a relaunch never rewrites, so it is
 # refused by name and recovered through the secondmate-provisioning skill.
 #
-# A relaunch is refused while fm-crew-state attributes any non-terminal
-# no-mistakes run-step to the task - working, parked at a gate, or still
-# monitoring green checks - because the outgoing agent may be in the synchronous
-# response flow and replacing it would duplicate pipeline ownership.
+# A relaunch is refused while a no-mistakes run attributed to the recorded
+# worktree has not reached a terminal outcome - mid-step, parked at a gate, or
+# still monitoring green checks - because the outgoing agent may be in the
+# synchronous response flow and replacing it would duplicate pipeline ownership.
+# fm-crew-state's verdict is reported with that refusal for context.
 # Let that response reach a terminal outcome first.
 # If the outgoing agent cannot finish the response, abort the run with the
 # supported no-mistakes command, confirm it stopped, follow branch_sync.next_action
@@ -64,12 +68,19 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 ID=$1
 
+FM_RELAUNCH_NM_TIMEOUT=${FM_RELAUNCH_NM_TIMEOUT:-10}
+case "$FM_RELAUNCH_NM_TIMEOUT" in ''|*[!0-9]*) FM_RELAUNCH_NM_TIMEOUT=10 ;; esac
+FM_RELAUNCH_RUNS_LIMIT=${FM_RELAUNCH_RUNS_LIMIT:-200}
+case "$FM_RELAUNCH_RUNS_LIMIT" in ''|*[!0-9]*) FM_RELAUNCH_RUNS_LIMIT=200 ;; esac
+
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-control-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-control-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-nm-run-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-nm-run-lib.sh"
 
 fm_task_id_creation_valid "$ID" || {
   echo "error: invalid task id '$ID'" >&2
@@ -135,34 +146,21 @@ fm_control_backend_state_verified "$BACKEND" || {
   exit 1
 }
 
-# fm-crew-state emits `state: <state> · source: <source>[ · <detail>]`. Any
-# run-step verdict means a no-mistakes run is attributed to this task, and the
-# outgoing agent may owe it a synchronous answer. Only a detail that names a
-# genuinely finished run clears the refusal: `working` is mid-step, `parked` is
-# sitting at a gate waiting for exactly the response this agent owes, `checks
-# green` is still monitoring the PR, and `unknown` proves nothing. Deciding on
-# the terminal DETAIL rather than on one state token keeps a still-active run
-# from slipping through on a state name that also has terminal instances.
-CREW_STATE=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-crew-state.sh" "$ID")
-CREW_SOURCE=${CREW_STATE#*· source: }
-CREW_SOURCE=${CREW_SOURCE%%·*}
-CREW_SOURCE=${CREW_SOURCE%"${CREW_SOURCE##*[![:space:]]}"}
-if [ "$CREW_SOURCE" = run-step ]; then
-  CREW_DETAIL=
-  case "$CREW_STATE" in
-    *"· source: run-step · "*)
-      CREW_DETAIL=${CREW_STATE#*· source: run-step · }
-      CREW_DETAIL=${CREW_DETAIL%%·*}
-      CREW_DETAIL=${CREW_DETAIL%"${CREW_DETAIL##*[![:space:]]}"}
-      ;;
-  esac
-  case "$CREW_DETAIL" in
-    'run passed: PR merged/closed'|'run completed'|'run failed'|'run cancelled') ;;
-    *)
-      echo "error: task $ID has an active no-mistakes run-step ($CREW_STATE); relaunch is refused while a gate response may own the branch. Let the response reach a terminal outcome, or abort and recover custody as documented in this script header." >&2
-      exit 1
-      ;;
-  esac
+# Only a ship drives a no-mistakes validation of its own worktree (the same rule
+# bin/fm-crew-state.sh and bin/fm-teardown.sh apply), and only a run that has not
+# reached a terminal outcome can still owe or be owed a synchronous gate
+# response. The verdict comes from the run itself through the shared attribution
+# owner, never from a reporting layer's summary of it: fm-crew-state
+# legitimately presents a live run as `done` to a human once the worker has
+# posted "PR open, checks green", so a refusal keyed on that presentation would
+# stop an agent whose run is still going.
+if [ "$KIND" = ship ]; then
+  RUN_ACTIVITY=$(fm_nm_run_active_for_worktree \
+    "$WORKTREE" "$FM_RELAUNCH_NM_TIMEOUT" "$FM_RELAUNCH_RUNS_LIMIT") && {
+    CREW_STATE=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-crew-state.sh" "$ID" 2>/dev/null || true)
+    echo "error: task $ID has a no-mistakes run that has not reached a terminal outcome ($RUN_ACTIVITY); relaunch is refused while a gate response may own the branch. Let the run reach a terminal outcome, or abort and recover custody as documented in this script header. Crew state: ${CREW_STATE:-unavailable}" >&2
+    exit 1
+  }
 fi
 
 NOTE_DIR=$(cd "$(dirname "$NOTE")" && pwd -P)

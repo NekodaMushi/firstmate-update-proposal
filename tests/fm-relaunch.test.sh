@@ -48,6 +48,7 @@ case "${1:-}" in
       case "$arg" in
         *pane_current_command*) cat "$D/command"; printf '\n'; exit 0 ;;
         *pane_current_path*) cat "$D/cwd"; printf '\n'; exit 0 ;;
+        *pane_pid*) printf '%s\n' "${FM_FAKE_PANE_PID:-4242}"; exit 0 ;;
         *pane_tty*) printf '\n'; exit 0 ;;
         *cursor_y*) printf '1\n'; exit 0 ;;
       esac
@@ -56,22 +57,16 @@ case "${1:-}" in
     exit 0
     ;;
   capture-pane)
-    # FM_FAKE_NO_SHELL_PROMPT models a pane whose agent process is provably gone
-    # while the rendering never shows a login-shell prompt row: the last
-    # non-blank row stays the previous agent's box art.
-    # FM_FAKE_LEFTOVER_AGENT_GLYPH models the same dead pane still displaying the
-    # departed agent's own bare composer row.
-    if [ "${FM_FAKE_LEFTOVER_AGENT_GLYPH:-0}" = 1 ] && [ "$(cat "$D/command")" = zsh ]; then
-      printf 'some transcript\n❯ \n'
+    # FM_FAKE_STARSHIP_PROMPT renders the two-line starship prompt this repo's
+    # own operator actually gets: the last non-blank row is a bare `❯`, which is
+    # also claude's composer glyph. Readiness must not depend on telling those
+    # apart from a screen capture.
+    if [ "$(cat "$D/command")" = zsh ] && [ "${FM_FAKE_STARSHIP_PROMPT:-0}" = 1 ]; then
+      printf '~/wt 🌿 main\n❯ \n'
       exit 0
     fi
-    if [ "$(cat "$D/command")" = zsh ] && [ "${FM_FAKE_NO_SHELL_PROMPT:-0}" != 1 ]; then
-      if [ ! -e "$D/shell-captured" ]; then
-        : > "$D/shell-captured"
-        printf '╭────╮\n│    │\n╰────╯\n'
-      else
-        printf '$ \n'
-      fi
+    if [ "$(cat "$D/command")" = zsh ]; then
+      printf '$ \n'
     else
       printf '╭────╮\n│    │\n╰────╯\n'
     fi
@@ -101,6 +96,21 @@ steps[2]{step,status,findings,duration_ms}:
   review,completed,0,1
   test,running,0,1
 EOF
+  elif [ "${FM_FAKE_RUN_CHECKS_PASSED:-0}" = 1 ]; then
+    # A run that ENDED with a green PR awaiting review. checks-passed is terminal
+    # everywhere in the fleet, so this run owns nothing and must not block.
+    cat <<EOF
+run:
+  id: "RUN1"
+  branch: $branch
+  status: completed
+  outcome: checks-passed
+  head: "$head"
+  pr: "https://example.invalid/pr/1"
+steps[2]{step,status,findings,duration_ms}:
+  review,completed,0,1
+  ci,completed,0,1
+EOF
   elif [ "${FM_FAKE_RUN_PARKED:-0}" = 1 ]; then
     # A run sitting at a review gate: the outgoing agent owes it the synchronous
     # answer that a replacement would duplicate.
@@ -128,6 +138,28 @@ SH
 exit 0
 SH
   chmod +x "$fb/sleep"
+
+  # The pane's process table. FM_FAKE_SHELL_CHILD models the one state the
+  # foreground-command classifier cannot see: the pane is back at its shell, but
+  # something is still running underneath it.
+  cat > "$fb/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+D=$FM_FAKE_DIR
+pane_pid=${FM_FAKE_PANE_PID:-4242}
+args="$*"
+case "$args" in
+  *"-axo pid=,ppid="*)
+    printf '%s 1\n' "$pane_pid"
+    [ "${FM_FAKE_SHELL_CHILD:-0}" != 1 ] || printf '9999 %s\n' "$pane_pid"
+    exit 0
+    ;;
+  *"-o comm="*) cat "$D/command"; printf '\n'; exit 0 ;;
+  *"-o stat="*) printf 'Ss\n'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fb/ps"
 }
 
 new_case() {  # <name> <id>
@@ -170,10 +202,11 @@ run_relaunch() {  # <case-dir> <id>
   env PATH="$dir/fakebin:$PATH" FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" \
     FM_SPAWN_NO_GUARD=1 FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.03 \
     FM_CONTROL_LAUNCH_WAIT=0.03 FM_SEND_SETTLE=0 \
-    FM_FAKE_NO_SHELL_PROMPT="${FM_FAKE_NO_SHELL_PROMPT:-0}" \
-    FM_FAKE_LEFTOVER_AGENT_GLYPH="${FM_FAKE_LEFTOVER_AGENT_GLYPH:-0}" \
+    FM_FAKE_STARSHIP_PROMPT="${FM_FAKE_STARSHIP_PROMPT:-0}" \
+    FM_FAKE_SHELL_CHILD="${FM_FAKE_SHELL_CHILD:-0}" \
     FM_FAKE_RUN_ACTIVE="${FM_FAKE_RUN_ACTIVE:-0}" \
     FM_FAKE_RUN_PARKED="${FM_FAKE_RUN_PARKED:-0}" \
+    FM_FAKE_RUN_CHECKS_PASSED="${FM_FAKE_RUN_CHECKS_PASSED:-0}" \
     "$RELAUNCH" "$id" 2>&1
 }
 
@@ -202,26 +235,28 @@ test_successful_relaunch_preserves_the_same_worktree() {
 test_refuses_when_the_pane_never_becomes_a_bare_shell() {
   local dir out rc
   dir=$(new_case never-bare rr2)
-  out=$(FM_FAKE_NO_SHELL_PROMPT=1 run_relaunch "$dir" rr2); rc=$?
-  expect_code 1 "$rc" "a pane that never shows a shell prompt must refuse"
+  out=$(FM_FAKE_SHELL_CHILD=1 run_relaunch "$dir" rr2); rc=$?
+  expect_code 1 "$rc" "a pane whose shell still has a child must refuse"
   assert_contains "$out" "did not become a verifiable bare shell" \
     "the refusal should name the unproven shell readiness, not the agent exit"
   assert_no_grep 'encode launch-brief' "$dir/fake/literal" "a replacement must not launch before bare-shell proof"
   [ "$(cat "$dir/fake/command")" = zsh ] \
-    || fail "this fixture must prove the old agent died, so only the prompt proof is missing"
-  pass "fm-relaunch: refuses without launching when a dead agent's pane never shows a shell prompt"
+    || fail "this fixture must prove the agent left the foreground, so only the child proof is missing"
+  pass "fm-relaunch: refuses without launching while the endpoint's shell still owns a child process"
 }
 
-test_refuses_when_only_a_leftover_agent_prompt_is_visible() {
-  local dir out rc
-  dir=$(new_case leftover-glyph rr4)
-  out=$(FM_FAKE_LEFTOVER_AGENT_GLYPH=1 run_relaunch "$dir" rr4); rc=$?
-  expect_code 1 "$rc" "a leftover agent composer row is not a ready shell"
-  assert_contains "$out" "did not become a verifiable bare shell" \
-    "the refusal should name the unproven shell readiness"
-  assert_no_grep 'encode launch-brief' "$dir/fake/literal" \
-    "a replacement must not launch on a stale agent prompt row"
-  pass "fm-relaunch: a leftover agent prompt glyph never counts as a ready shell"
+test_relaunches_under_an_exotic_shell_prompt() {
+  local dir out rc before after
+  dir=$(new_case starship rr4)
+  before=$(git -C "$dir/worktree" rev-parse HEAD)
+  out=$(FM_FAKE_STARSHIP_PROMPT=1 run_relaunch "$dir" rr4); rc=$?
+  expect_code 0 "$rc" "a starship prompt ending in the agent glyph must still relaunch"$'\n'"$out"
+  after=$(git -C "$dir/worktree" rev-parse HEAD)
+  [ "$before" = "$after" ] || fail "relaunch changed the worktree HEAD"
+  [ -f "$dir/worktree/scratch.txt" ] || fail "relaunch lost the uncommitted file"
+  assert_grep 'encode launch-brief' "$dir/fake/literal" \
+    "readiness must not depend on which symbols the operator's prompt draws"
+  pass "fm-relaunch: an exotic prompt whose last row is the agent glyph still relaunches"
 }
 
 test_refuses_an_empty_relaunch_note() {
@@ -248,12 +283,23 @@ test_refuses_a_secondmate_task() {
   pass "fm-relaunch: refuses a secondmate, whose charter never carries the note pointer"
 }
 
+test_relaunches_once_the_run_reached_a_terminal_outcome() {
+  local dir out rc
+  dir=$(new_case checks-passed rr8)
+  out=$(FM_FAKE_RUN_CHECKS_PASSED=1 run_relaunch "$dir" rr8); rc=$?
+  expect_code 0 "$rc" "a run that ended with checks-passed owns nothing and must not block"$'\n'"$out"
+  assert_grep 'encode launch-brief' "$dir/fake/literal" \
+    "a terminal run must not stop the replacement from launching"
+  pass "fm-relaunch: a run that ended with a green PR awaiting review still allows relaunch"
+}
+
 test_refuses_while_a_run_is_parked_at_a_gate() {
   local dir out rc
   dir=$(new_case parked-gate rr7)
   out=$(FM_FAKE_RUN_PARKED=1 run_relaunch "$dir" rr7); rc=$?
   expect_code 1 "$rc" "a run parked at a gate must refuse relaunch"
-  assert_contains "$out" "active no-mistakes run-step" "the refusal should name pipeline ownership"
+  assert_contains "$out" "has not reached a terminal outcome (active:awaiting_approval)" \
+    "the refusal should name the gate the run is parked at"
   [ ! -s "$dir/fake/literal" ] || fail "a parked gate must send no lifecycle input"
   [ "$(cat "$dir/fake/command")" = claude ] || fail "a parked gate must leave the old agent running"
   pass "fm-relaunch: refuses while a run sits at a gate the outgoing agent may owe an answer"
@@ -264,7 +310,8 @@ test_refuses_while_a_no_mistakes_run_owns_the_branch() {
   dir=$(new_case run-owner rr3)
   out=$(FM_FAKE_RUN_ACTIVE=1 run_relaunch "$dir" rr3); rc=$?
   expect_code 1 "$rc" "an active run-step must refuse relaunch"
-  assert_contains "$out" "active no-mistakes run-step" "the refusal should name pipeline ownership"
+  assert_contains "$out" "has not reached a terminal outcome (active:running)" \
+    "the refusal should name the live run it read from the run itself"
   [ ! -s "$dir/fake/literal" ] || fail "run ownership refusal must send no lifecycle input"
   [ "$(cat "$dir/fake/command")" = claude ] || fail "run ownership refusal must leave the old agent running"
   pass "fm-relaunch: refuses while an active no-mistakes response may own the branch"
@@ -272,8 +319,9 @@ test_refuses_while_a_no_mistakes_run_owns_the_branch() {
 
 test_successful_relaunch_preserves_the_same_worktree
 test_refuses_when_the_pane_never_becomes_a_bare_shell
-test_refuses_when_only_a_leftover_agent_prompt_is_visible
+test_relaunches_under_an_exotic_shell_prompt
 test_refuses_an_empty_relaunch_note
 test_refuses_a_secondmate_task
 test_refuses_while_a_no_mistakes_run_owns_the_branch
 test_refuses_while_a_run_is_parked_at_a_gate
+test_relaunches_once_the_run_reached_a_terminal_outcome

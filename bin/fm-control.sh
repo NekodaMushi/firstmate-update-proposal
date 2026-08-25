@@ -334,33 +334,39 @@ wait_agent_state() {  # <timeout> <wanted>...
   return 1
 }
 
-# screen_has_visible_shell_prompt asks bin/fm-composer-lib.sh - the one owner of
-# the agent and shell prompt glyph tables - whether the last non-blank rendered
-# row is a login-shell prompt. The glyph sets are never respelled here, so a
-# leftover agent composer row (claude's bare `❯`) can never be mistaken for a
-# ready shell. Old agent output elsewhere in the pane is not proof either.
-screen_has_visible_shell_prompt() {  # <screen>
-  local screen=$1 last
+# rendered_prompt_hint: a DIAGNOSTIC note about what the endpoint is drawing,
+# recorded in the relaunch journal beside the process proof. It is never a
+# rejector: what a ready shell looks like is whatever the operator's PS1 draws,
+# so an unrecognised last row means "nothing to add", not "not ready".
+rendered_prompt_hint() {
+  local screen last
+  screen=$(fm_backend_capture "$BACKEND" "$T" "$FM_COMPOSER_CAPTURE_LINES" "$LABEL" 2>/dev/null || true)
   last=$(printf '%s\n' "$screen" | fm_composer_strip_ansi | tr -d '\r' |
     awk 'NF { line=$0 } END { print line }')
-  fm_composer_row_is_shell_prompt "$last"
+  if fm_composer_row_is_shell_prompt "$last"; then
+    printf 'shell-prompt'
+  else
+    printf 'unrecognized'
+  fi
 }
 
-# wait_bare_shell proves both halves of the relaunch handoff: the recovery-grade
-# classifier sees no agent process, and the endpoint renders a visible shell
-# prompt on its last non-blank row. A dead process verdict with only stale agent
-# output is not enough to launch a replacement.
+# wait_bare_shell proves both halves of the relaunch handoff, entirely from
+# process state read through the recorded backend: the recovery-grade classifier
+# sees no agent in the endpoint's foreground, and the endpoint separately proves
+# it is sitting at its own shell with no child process left behind it. Nothing
+# here reads the rendered screen, because a shell prompt is whatever PS1 draws
+# and no glyph vocabulary can decide readiness for every operator.
+# Prints the proof token on success and the blocking state on timeout.
 wait_bare_shell() {  # <timeout>
-  local timeout=$1 state screen elapsed=0
+  local timeout=$1 state proof elapsed=0
   while :; do
     state=$(agent_state)
     if [ "$state" = dead ]; then
-      screen=$(fm_backend_capture "$BACKEND" "$T" 20 "$LABEL" 2>/dev/null || true)
-      if screen_has_visible_shell_prompt "$screen"; then
-        printf '%s' dead
+      proof=$(fm_backend_shell_ready "$BACKEND" "$T") && {
+        printf '%s' "$proof"
         return 0
-      fi
-      state=dead-prompt-unreadable
+      }
+      state="dead-but-$proof"
     fi
     awk -v e="$elapsed" -v t="$timeout" 'BEGIN{exit !(e < t)}' || break
     sleep "$POLL"
@@ -860,9 +866,10 @@ do_relaunch() {
   journal_write stopping "${CHECKPOINT_LINES[@]}" "$note_line"
   exit_result=$(do_exit)
   state=$(wait_bare_shell "$EXIT_WAIT") || {
-    die "task $ID's old agent stopped, but its endpoint did not become a verifiable bare shell with a visible prompt within ${EXIT_WAIT}s (state: $state); refusing to launch a replacement"
+    die "task $ID's old agent stopped, but its endpoint did not become a verifiable bare shell within ${EXIT_WAIT}s (state: $state); refusing to launch a replacement"
   }
-  journal_write exited "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result" "shell_ready=$state"
+  journal_write exited "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result" \
+    "shell_ready=$state" "rendered=$(rendered_prompt_hint)"
 
   # The launch owner (fm-spawn --relaunch) clears the previous incarnation's
   # per-task harness wiring before arming the new one, so nothing to do here.

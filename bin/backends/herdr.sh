@@ -1937,6 +1937,22 @@ fm_backend_herdr_agent_state() {  # <target>
   esac
 }
 
+# fm_backend_herdr_shell_ready: the Herdr half of fm_backend_shell_ready.
+# fm_backend_herdr_agent_state answers from the agent REGISTRY, so a pane whose
+# agent record is gone can still be running something; the idle-shell proof
+# above is the process-level answer and already owns the settle retry, so this
+# is a thin adapter over it.
+fm_backend_herdr_shell_ready() {  # <target>
+  fm_backend_herdr_parse_target "$1" || { printf 'unreadable'; return 1; }
+  if fm_backend_herdr_pane_idle_shell_pid \
+      "$FM_BACKEND_HERDR_SESSION" "$FM_BACKEND_HERDR_PANE" >/dev/null 2>&1; then
+    printf 'idle-shell'
+    return 0
+  fi
+  printf 'no-idle-shell'
+  return 1
+}
+
 # Backward-compatible three-state view for callers that only need a yes/no
 # agent verdict. The detailed state contract is owned by fm_backend_agent_state.
 fm_backend_herdr_agent_alive() {  # <target>
