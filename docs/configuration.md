@@ -26,7 +26,8 @@ Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, whil
 
 ## Task gates (`data/<id>/gates.md` and `data/<id>/gates-result.md`)
 
-A task may carry an acceptance-gate file at `data/<id>/gates.md`, written by Firstmate at intake, next to the task's brief.
+A task may carry an acceptance-gate file at `data/<id>/gates.md`, next to the task's brief.
+Firstmate writes it at intake by hand; no command generates it yet.
 `bin/fm-gates-check.sh <id>` runs every `CHECK:` inside the task's isolated copy resolved from `worktree=` in `state/<id>.meta`, under a per-command timeout, and writes the verdicts to `data/<id>/gates-result.md`.
 That script's header is the single owner of both file formats, the verdict rules, and the exit codes.
 The checker never edits `gates.md` or any file in the copy; `gates-result.md` is the only file it writes.
