@@ -36,75 +36,108 @@ jobs:
           marker='Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)'
           if printf '%s' "${PR_BODY:-}" | grep -qF -- "$marker"; then
             echo "Found no-mistakes signature in PR #${PR_NUMBER} body."
-            if ! command -v jq >/dev/null 2>&1; then
-              echo "::error::This check requires jq to parse no-mistakes pipeline step attestation, but jq was not found on the runner." >&2
-              exit 1
-            fi
+            # The structured attestation comment is the preferred evidence, but
+            # not every no-mistakes release writes one: an existing PR body
+            # updated by no-mistakes v1.57.0 carries the pipeline section without
+            # it. When the comment is absent, read the same three step outcomes
+            # from the rendered "## Pipeline" summaries the pipeline always
+            # writes, so a skipped step is still caught without failing every PR.
             prefix='<!-- no-mistakes-pipeline-attestation:v1 '
             suffix=' -->'
             body="${PR_BODY:-}"
             json=''
-            parse_ok=0
+            attested=0
+            incomplete=''
             case "$body" in
               *"$prefix"*)
-                rest="${body#*"$prefix"}"
-                case "$rest" in
-                  *"$suffix"*)
-                    json="${rest%%"$suffix"*}"
-                    if printf '%s' "$json" | jq -e . >/dev/null 2>&1; then
-                      parse_ok=1
-                    fi
-                    ;;
-                esac
+                attested=1
                 ;;
             esac
-            if [ "$parse_ok" -ne 1 ]; then
-              {
-                echo "::error::This repository requires no-mistakes >= 1.46.0; structured pipeline step attestation is missing or unparseable."
-                echo
-                echo "The no-mistakes signature was found, but this check also requires one"
-                echo "HTML comment in the PR body:"
-                echo
-                echo '    <!-- no-mistakes-pipeline-attestation:v1 {"head_sha":"...","steps":[...]} -->'
-                echo
-                echo "That comment is emitted by no-mistakes >= 1.46.0 (the release that started"
-                echo "emitting structured step attestation; see https://github.com/kunchenguid/no-mistakes/pull/670)."
-                echo "An older no-mistakes that writes only the signature line is not enough."
-                echo
-                echo "Re-run the pipeline with 'git push no-mistakes' using no-mistakes >= 1.46.0."
-                echo "See CONTRIBUTING.md for setup and the full workflow."
-                echo
-                echo "PR author: ${PR_AUTHOR}"
-              } >&2
-              exit 1
-            fi
-            incomplete=''
-            for required in review test document; do
-              status=$(printf '%s' "$json" | jq -r --arg step "$required" \
-                '([(.steps | arrays | .[]) | select(.step == $step) | .status] | first // empty | select(. != "")) // "missing"')
-              if [ "$status" != "completed" ]; then
-                if [ -n "$incomplete" ]; then
-                  incomplete="${incomplete}, "
-                fi
-                incomplete="${incomplete}${required}=${status}"
+            if [ "$attested" -eq 1 ]; then
+              if ! command -v jq >/dev/null 2>&1; then
+                echo "::error::This check requires jq to parse no-mistakes pipeline step attestation, but jq was not found on the runner." >&2
+                exit 1
               fi
-            done
+              parse_ok=0
+              rest="${body#*"$prefix"}"
+              case "$rest" in
+                *"$suffix"*)
+                  json="${rest%%"$suffix"*}"
+                  if printf '%s' "$json" | jq -e . >/dev/null 2>&1; then
+                    parse_ok=1
+                  fi
+                  ;;
+              esac
+              if [ "$parse_ok" -ne 1 ]; then
+                {
+                  echo "::error::The no-mistakes pipeline step attestation in the PR body is unparseable."
+                  echo
+                  echo "The body carries the attestation marker, but the JSON between"
+                  echo
+                  echo '    <!-- no-mistakes-pipeline-attestation:v1 {"head_sha":"...","steps":[...]} -->'
+                  echo
+                  echo "is missing its closing marker or is not valid JSON."
+                  echo "Re-run the pipeline with 'git push no-mistakes' so it rewrites the body."
+                  echo "See CONTRIBUTING.md for setup and the full workflow."
+                  echo
+                  echo "PR author: ${PR_AUTHOR}"
+                } >&2
+                exit 1
+              fi
+              evidence='structured pipeline step attestation'
+              for required in review test document; do
+                status=$(printf '%s' "$json" | jq -r --arg step "$required" \
+                  '([(.steps | arrays | .[]) | select(.step == $step) | .status] | first // empty | select(. != "")) // "missing"')
+                if [ "$status" != "completed" ]; then
+                  if [ -n "$incomplete" ]; then
+                    incomplete="${incomplete}, "
+                  fi
+                  incomplete="${incomplete}${required}=${status}"
+                fi
+              done
+            else
+              evidence='rendered pipeline step summaries'
+              for required in review test document; do
+                line=$(printf '%s\n' "$body" \
+                  | awk -v m="$marker" 'index($0, m) > 0 { seen = 1 } seen' \
+                  | grep -i -m1 -e "\*\*${required}\*\* -" || true)
+                status=$(printf '%s\n' "$line" \
+                  | sed -e 's/.*\*\* -[[:space:]]*//' -e 's/<.*//' -e 's/[[:space:]]*$//' \
+                  | tr '[:upper:]' '[:lower:]')
+                if [ -z "$status" ]; then
+                  status='missing'
+                fi
+                # Deny-list rather than allow-list: a completed step renders its
+                # findings ("1 info", "2 warnings"), which cannot be enumerated,
+                # while every not-completed outcome has a fixed rendering.
+                case "$status" in
+                  missing|skipped|pending|running|auto-fixing|failed|\
+                  'review fix'|'awaiting approval'|'findings unavailable'|'status unavailable')
+                    if [ -n "$incomplete" ]; then
+                      incomplete="${incomplete}, "
+                    fi
+                    incomplete="${incomplete}${required}=${status}"
+                    ;;
+                esac
+              done
+            fi
             if [ -n "$incomplete" ]; then
               {
                 echo "::error::Required no-mistakes pipeline steps are not completed: ${incomplete}."
                 echo
-                echo "This repository requires review, test, and document to each have status"
-                echo "exactly 'completed'. Quota skips and agent skips are not compliant."
+                echo "This repository requires the review, test, and document steps to each"
+                echo "complete. Quota skips and agent skips are not compliant."
+                echo "Statuses were read from the ${evidence} in the PR body."
                 echo
-                echo "Re-run the pipeline with 'git push no-mistakes' using no-mistakes >= 1.46.0"
-                echo "so those required steps complete rather than skip."
+                echo "Re-run the pipeline with 'git push no-mistakes' so those required steps"
+                echo "complete rather than skip."
                 echo "See CONTRIBUTING.md for setup and the full workflow."
                 echo
                 echo "PR author: ${PR_AUTHOR}"
               } >&2
               exit 1
             fi
-            echo "Pipeline step attestation is valid: review, test, and document are completed."
+            echo "Pipeline steps verified from the ${evidence}: review, test, and document completed."
             exit 0
           fi
           {
