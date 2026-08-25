@@ -29,8 +29,11 @@
 #   field    indented by at least one space or tab, following its gate line with
 #            nothing but blank lines and accepted sibling fields in between, one of
 #            "CHECK: <value>", "EXPECT: <value>", "EVIDENCE: <value>". Each value is
-#            non-empty and each key appears at most once per gate. EXPECT is matched
-#            as text, so a CHECK that emits NUL bytes still decides its gate.
+#            non-empty and each key appears at most once per gate, and trailing
+#            whitespace is stripped from it, so the two spaces a Markdown hard line
+#            break leaves behind never become part of the substring a gate is
+#            matched against. EXPECT is matched as text, so a CHECK that emits NUL
+#            bytes still decides its gate.
 #   abandon  at column 0, "ABANDON: <id> <reason>", both parts non-empty, anywhere in
 #            the file, and at most one per id: a second ABANDON naming an id an
 #            earlier line already abandoned is a parse error on that second line,
@@ -50,6 +53,10 @@
 # four characters, meaning a "[" whose content up to the "]" is only spaces, tabs, x,
 # or X. So "* [ ] G2", "-[ ] G2", "- [ x] G2" and "- [ ]G2:" are errors, while the
 # Markdown link bullet "- [issue#2](url)" and ordinary prose stay context.
+# A leading "#" buys no exemption from that rule: "# Gates for t1" is a heading and
+# stays context, but "#- [ ] G2" and "## [x] done" open a box inside the window and
+# are errors like any other slipped box, so a stray hash cannot delete a whole gate
+# without saying so.
 # A line whose trimmed form starts with ABANDON, CHECK:, EXPECT:, or EVIDENCE: is held
 # to that shape for the same reason.
 # EVIDENCE: pending is the literal the intake writes, compared ignoring case and
@@ -229,7 +236,9 @@ evidence_is_pending() {
 }
 
 # Run one CHECK in the copy with the per-gate timeout; echo its combined output.
-# Return 124 on timeout (same as timeout(1)); any other code is the CHECK's own.
+# Return 124 on timeout (same as timeout(1)); any other code is the CHECK's own,
+# and a CHECK killed by a signal reports 128 plus that signal on either path, so
+# the result file never records a crash as a clean exit.
 # timeout(1) reports 137 when it had to escalate to KILL, which is a timeout on
 # the wall clock and is reported as one; a CHECK that dies of 137 before the
 # deadline keeps its own code.
@@ -241,7 +250,7 @@ run_check() {
   elif [ "${FM_CHECK_FORCE_FALLBACK:-0}" != 1 ] && command -v gtimeout >/dev/null 2>&1; then
     (cd "$COPY" && gtimeout -k "$KILL_GRACE" "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null) 2>/dev/null || rc=$?
   else
-    (cd "$COPY" && perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } my $stop = sub { $SIG{HUP} = $SIG{INT} = $SIG{TERM} = "IGNORE"; kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; waitpid $pid, 0; exit 124 }; local $SIG{ALRM} = $stop; local $SIG{HUP} = $stop; local $SIG{INT} = $stop; local $SIG{TERM} = $stop; alarm $t; waitpid $pid, 0; exit($? >> 8)' "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null) || rc=$?
+    (cd "$COPY" && perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { setpgrp(0, 0); exec @ARGV } my $stop = sub { $SIG{HUP} = $SIG{INT} = $SIG{TERM} = "IGNORE"; kill "TERM", -$pid; select undef, undef, undef, 0.2; kill "KILL", -$pid; waitpid $pid, 0; exit 124 }; local $SIG{ALRM} = $stop; local $SIG{HUP} = $stop; local $SIG{INT} = $stop; local $SIG{TERM} = $stop; alarm $t; waitpid $pid, 0; exit($? & 127 ? 128 + ($? & 127) : $? >> 8)' "$TIMEOUT" bash -c "$cmd" 2>&1 </dev/null) || rc=$?
   fi
   if [ "$rc" -eq 137 ] && [ "$(( $(date +%s) - started ))" -ge "$TIMEOUT" ]; then
     rc=124
@@ -313,7 +322,6 @@ while IFS= read -r line || [ -n "$line" ]; do
   line=${line%$'\r'}
   trimmed=${line#"${line%%[![:space:]]*}"}
   [ -n "$trimmed" ] || continue
-  case "$trimmed" in '#'*) cur=-1; continue ;; esac
 
   if opens_a_box "$trimmed"; then
     if [ "$trimmed" != "$line" ]; then
@@ -356,6 +364,8 @@ while IFS= read -r line || [ -n "$line" ]; do
     cur=$(( ${#GATE_IDS[@]} - 1 ))
     continue
   fi
+
+  case "$trimmed" in '#'*) cur=-1; continue ;; esac
 
   case "$trimmed" in
     ABANDON*)
@@ -405,6 +415,7 @@ while IFS= read -r line || [ -n "$line" ]; do
       cur=-1; continue ;;
   esac
   value=${trimmed#"$key": }
+  value=${value%"${value##*[![:space:]]}"}
   if [ -z "${value#"${value%%[![:space:]]*}"}" ]; then
     parse_error "$lineno" "$key line carries no value"
     cur=-1; continue

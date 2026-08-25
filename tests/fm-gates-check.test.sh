@@ -4,8 +4,10 @@
 # written, no EVIDENCE line at all), a task with no gates.md, a gates.md
 # that declares nothing parseable, a timed-out CHECK through both the timeout(1)
 # and the perl paths, the deciding excerpt, output carrying NUL bytes, the parse
-# errors a hand-edited file can carry, the prose it may carry safely, the task
-# ids and timeout values that are refused outright, and the no-write guarantees.
+# errors a hand-edited file can carry, the prose it may carry safely, the padding
+# it may carry around a value, the exit code of a CHECK killed by a signal, the
+# task ids and timeout values that are refused outright, and the no-write
+# guarantees.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -295,6 +297,8 @@ two spaces before the box|$REF\n-  [ ] G2: x|5|1
 a space inside the box|$REF\n- [ x] G2: x|5|1
 no space after the box|$REF\n- [ ]G2: x|5|1
 a box with no bullet|$REF\n[x] G2: x|5|1
+a box commented out with a hash|$REF\n#- [ ] G2: x|5|1
+a box inside a heading|$REF\n## [x] done|5|1
 an indented gate line|$REF\n - [ ] G2: x|5|1
 a gate with no id|$REF\n- [ ] : an outcome with no id|5|1
 a gate id carrying whitespace|$REF\n- [ ] G 2: x|5|1
@@ -312,7 +316,7 @@ an abandon with no reason|$REF\nABANDON: G1|5|1
 an abandon with no id|$REF\nABANDON:   |5|1
 an id abandoned twice|$REF\nABANDON: G9 dropped\nABANDON: G9 dropped again|6|1
 TABLE
-[ "$rows" -eq 26 ] || fail "the grammar table ran $rows rows, not 26"
+[ "$rows" -eq 28 ] || fail "the grammar table ran $rows rows, not 28"
 pass "the grammar takes its three shapes, ignores context, and reports every slip"
 
 # 8g. A line the checker does not recognise closes the gate above it, so a field
@@ -344,11 +348,12 @@ a plain prose note|note: G2 was moved to a follow-up|5
 a heading|## G2 notes|5
 an abandon of another gate|ABANDON: G9 dropped elsewhere|5
 a rejected gate line|* [ ] G2: an asterisk bullet|4 5
+a gate line commented out with a hash|#- [ ] G2: commented out|4 5
 an unindented field|CHECK: stray at column zero|4 5
 an indented field missing its space|  EXPECT:nope|4 5
 an indented field with no value|  EXPECT:   |4 5
 TABLE
-[ "$rows" -eq 10 ] || fail "the adoption table ran $rows rows, not 10"
+[ "$rows" -eq 11 ] || fail "the adoption table ran $rows rows, not 11"
 pass "a stray line closes the gate above it instead of feeding it"
 
 # 8h. A second ABANDON of a gate already abandoned is refused on its own line, so
@@ -396,6 +401,39 @@ out=$(run t1 --accept-abandon G1 2>&1); rc=$?
 [ "$rc" -eq 0 ] || fail "the padded gate id should be the one ABANDON names, got $rc: $out"
 grep -q '^G1: abandoned - accepted' <<<"$out" || fail "padded gate id was not matched: $out"
 pass "the gate id is read the same way wherever it appears"
+
+# 8j. Trailing whitespace is padding, not part of a value: an EXPECT carrying a
+#     Markdown hard line break still matches the output that contains it.
+printf -- '- [ ] G1: README mentions hello\n  CHECK: cat README.md  \n  EXPECT: hello  \n  EVIDENCE: pending\n' \
+  > "$GATES"
+out=$(run t1 2>&1); rc=$?
+[ "$rc" -eq 0 ] || fail "a hard line break after EXPECT should not fail the gate, got $rc: $out"
+grep -q "^G1: satisfied - output contained EXPECT 'hello' " <<<"$out" \
+  || fail "the padding stayed part of the EXPECT value: $out"
+printf -- '- [x] G1: README mentions hello\n  CHECK: cat README.md\n  EXPECT: hello\n  EVIDENCE: pending\t\n' \
+  > "$GATES"
+out=$(run t1 2>&1); rc=$?
+[ "$rc" -eq 1 ] || fail "a tab after pending should not turn it into recorded evidence, got $rc: $out"
+grep -q '^G1: unsatisfied.*ticked by hand' <<<"$out" || fail "the padded pending was read as evidence: $out"
+pass "trailing whitespace pads a value rather than deciding a gate"
+
+# 8k. A CHECK killed by a signal records 128+signal, the same on either timer
+#     path, so the result never reads a crash as a clean exit.
+cat > "$GATES" <<'GATES_EOF'
+- [ ] G1: the CHECK dies before it can print the match
+  CHECK: echo partial; kill -SEGV $$
+  EXPECT: never printed
+  EVIDENCE: pending
+GATES_EOF
+out=$(run t1 --timeout 10 2>&1); rc=$?
+[ "$rc" -eq 1 ] || fail "a CHECK that crashes should leave its gate unsatisfied, got $rc: $out"
+grep -q '^G1: unsatisfied.*(exit 139)$' <<<"$out" || fail "timeout(1) path lost the signal exit code: $out"
+out=$(FM_CHECK_FORCE_FALLBACK=1 run t1 --timeout 10 2>&1); rc=$?
+[ "$rc" -eq 1 ] || fail "a crashing CHECK on the perl fallback should exit 1, got $rc: $out"
+grep -q '^G1: unsatisfied.*(exit 139)$' <<<"$out" \
+  || fail "the perl fallback recorded the crash as a clean exit: $out"
+grep -q 'exit 139' "$RESULT" || fail "the result file lost the signal exit code: $(cat "$RESULT")"
+pass "a CHECK killed by a signal is recorded as 128+signal on either timer path"
 
 # 9. No gates.md: explicit no-op, exit 0, no result written.
 mkdir -p "$HOME_DIR/data/t2"
