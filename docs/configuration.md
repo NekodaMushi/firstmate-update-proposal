@@ -29,8 +29,8 @@ Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, whil
 Firstmate owns the lifecycle of these two files.
 At intake, firstmate writes `data/<id>/gates.md` by hand before the brief, and an existing gate file requires scaffolding that ship or scout brief with `bin/fm-brief.sh --gates`; a secondmate charter carries no gates and the flag is refused there.
 Workers read `gates.md` but never write it.
-A worker may run the checker to gauge its own progress, but every run replaces `gates-result.md` and keeps no earlier one, so firstmate's run on the delivered head is the last one before the artifact is recorded and supersedes any worker run.
-Within `data/<id>/` the checker reads only `gates.md`, so a superseded contract or result kept there under another name, as a promoted scout's history is, stays inert.
+A worker may run the checker to gauge its own progress, but every run replaces `gates-result.md` and keeps no earlier one, so firstmate's own final run is the last action before the acceptance decision and supersedes any worker run.
+Within `data/<id>/` the checker reads only `gates.md`, so a superseded contract or result archived elsewhere in that directory, as a promoted scout's history under `archive/scout/` is, stays inert.
 `gates.md` contains gate declarations with expected outcomes, `CHECK`, `EXPECT`, and `EVIDENCE` fields, and optional `ABANDON` entries; `bin/fm-gates-check.sh`'s header is the single owner of their exact grammar and verdict semantics.
 At completion, firstmate runs `bin/fm-gates-check.sh <id>` against the task's isolated copy, which the checker resolves from `worktree=` in `state/<id>.meta` and checks as it stands on disk, uncommitted changes included.
 With no `data/<id>/gates.md` the checker reports that there is nothing to check and exits 0 without writing a result, so any `gates-result.md` still present then belongs to an earlier run.

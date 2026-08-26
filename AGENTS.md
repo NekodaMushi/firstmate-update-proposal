@@ -296,9 +296,9 @@ Any gate that can be translated into an executable test lands as a test in the d
 At completion, firstmate runs `bin/fm-gates-check.sh <task-id>` and treats `data/<task-id>/gates-result.md` as the completion artifact.
 A gate left unsatisfied, never checked, or abandoned without `--accept-abandon` blocks acceptance: the PR is not merged, the task is not recorded done, and a scout's report is not accepted as the Done artifact.
 Only firstmate under its configured authority or the captain may waive such a gate, never the worker; record the gate, why it is invalid, obsolete, or disproportionate, who authorized it, and any replacement check or accepted residual risk, then re-run the checker against the revised contract until the recorded result passes.
-A result passes when its summary records `exit=0`: no gate unsatisfied and every abandoned gate accepted with `--accept-abandon`, which leaves that gate's verdict `abandoned` and still passes.
-The checker verifies the task's copy as it stands on disk, uncommitted changes included, so `head:` records that copy's HEAD as a label rather than proof of what ran.
-Make firstmate's run the last action before acceptance and treat anything changed in the copy afterwards as unverified.
+A result passes when it records `exit=0`, and the checker's header owns the exact conditions behind that code.
+The checker verifies the task's copy as it stands on disk, uncommitted changes included, rather than any particular commit.
+Firstmate's own final run is the last action before the acceptance decision, and nothing may change in the copy between that run and acceptance.
 Write the task-specific brief under section 11 before spawning.
 
 ### Dispatch and supervision handoff
@@ -342,7 +342,7 @@ After an autonomous merge, give the captain a one-line full-URL or local-main ou
 
 For a no-mistakes ship, trigger validation on the same worker after its implementation commit, using the harness invocation owned by `harness-adapters`.
 For a gated task, run `bin/fm-gates-check.sh <id>` before starting that validation run, as the generated brief promises the worker.
-Validation fix rounds move the head, so re-run the checker on the final validated commit; only firstmate's last run decides the gates.
+Validation fix rounds change the copy, so re-run the checker once the last fix round has landed in it; only firstmate's final run decides the gates.
 The task worker that starts a no-mistakes run drives the pipeline and owns every `no-mistakes axi run` and `no-mistakes axi respond` call through the next gate or outcome.
 Firstmate never invokes `no-mistakes axi respond` for a crew-owned run.
 Once validation starts, prefer routing new requirements to follow-up work rather than expanding the current task, unless a new requirement completely invalidates the work being validated; however, the smallest downstream changes needed to keep already accepted product or engineering behavior correct, add behavioral tests where an executable contract exists, or keep documentation accurate remain within the current task even when they touch files not named at intake, and corrections required to satisfy already accepted intent are not new requirements.
@@ -390,8 +390,8 @@ Before treating the investigation or any visual review as complete, load `captai
 When a scout's deliverable is a visual artifact the captain will iterate on, prefer keeping that scout alive to host its own Lavish loop rather than tearing it down and mediating from firstmate, so the scout keeps its investigation context and the captain iterates in one continuous session.
 When implementation is separately authorized, promote the existing scout through `bin/fm-promote.sh` rather than creating a duplicate task.
 The promoted worker must inventory scratch state, return to a clean default-branch base, carry over only intended fix changes, create the ship branch, and follow the project's selected delivery path while leaving scratch commits and debug edits behind and turning a reproduced bug into the regression test.
-`bin/fm-promote.sh` flips the contract without touching gates, so a gated scout needs a fresh ship `gates.md` written at promotion while its scout gate file and completed result are kept as history and never edited.
-Move or delete the scout's `data/<id>/gates-result.md` at the same time, because a checker run with no `gates.md` in place writes nothing and leaves that stale result to be read as current.
+`bin/fm-promote.sh` flips the contract without touching gates, so a gated scout needs a fresh ship `gates.md` written at promotion.
+Archive the scout's `data/<id>/gates.md` and `data/<id>/gates-result.md` together and unedited under `data/<id>/archive/scout/`, never deleting either, so its completion evidence survives and no scout-era file is left at an active path to be read as current.
 Promotion carries the worker-facing contract too, so restate in the ship instructions that gates now land as tests in the delivery and that the checker runs at this task's ship phase, superseding the scout section's no-test, no-PR, and check-at-report wording that promotion does not regenerate.
 Carry gates over explicitly: translate each still-applicable scout gate into a ship gate and record the mapping, so a reproduced bug becomes a gate on its regression test being present and passing, and keep unresolved scout uncertainty as an explicit ship gate or a recorded risk rather than losing a negative finding.
 
