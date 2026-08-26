@@ -294,6 +294,9 @@ Serialize only for a true semantic dependency, shared mutable external state, in
 For a gated task, firstmate writes `data/<task-id>/gates.md` at intake using the `CHECK`, `EXPECT`, `EVIDENCE`, and `ABANDON` contract owned by `bin/fm-gates-check.sh`; the worker reads this file but never writes it.
 Any gate that can be translated into an executable test lands as a test in the delivery; a scout writes no test and records it in its report as a proposed test instead.
 At completion, firstmate runs `bin/fm-gates-check.sh <task-id>` and treats `data/<task-id>/gates-result.md` as the completion artifact.
+A gate left unsatisfied, never checked, or abandoned without `--accept-abandon` blocks acceptance: the PR is not merged, the task is not recorded done, and a scout's report is not accepted as the Done artifact.
+Only firstmate under its configured authority or the captain may waive such a gate, never the worker; record the gate, why it is invalid, obsolete, or disproportionate, who authorized it, and any replacement check or accepted residual risk, then re-run the checker against the revised contract so the recorded result is green.
+A result verifies exactly the commit its `head:` line names, so anything committed after firstmate's last run is unverified.
 Write the task-specific brief under section 11 before spawning.
 
 ### Dispatch and supervision handoff
@@ -364,7 +367,7 @@ The worker reports the PR when CI first becomes green rather than waiting for me
 For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
 Run `bin/fm-pr-check.sh <id> <PR url>` - it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll.
 Tell the captain the PR's full URL, always the complete `https://...` link rather than a bare `#number`, a concise outcome summary, and the no-mistakes risk level when applicable.
-For a gated task, run `bin/fm-gates-check.sh <id>` before the merge authority decides on a `direct-PR` PR and before accepting a `local-only` ready branch, and carry `data/<id>/gates-result.md` from that run as the completion artifact.
+For a gated task, run `bin/fm-gates-check.sh <id>` before the merge authority decides on a `direct-PR` PR and before accepting a `local-only` ready branch, and carry `data/<id>/gates-result.md` from that run as the completion artifact rather than landing on a result that is not green.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine merge authority.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 
@@ -379,12 +382,14 @@ Retire one only on an explicit captain or main-firstmate decision, after loading
 ### Scout outcome and promotion
 
 A completed scout must leave a self-contained report before its scratch worktree can be discarded; read and relay its findings, record the report as the Done artifact, and re-evaluate the queue.
-For a gated scout, run `bin/fm-gates-check.sh <id>` before accepting that report and record `data/<id>/gates-result.md` beside it.
+For a gated scout, run `bin/fm-gates-check.sh <id>` before accepting that report and record `data/<id>/gates-result.md` beside it, and hold acceptance while that result is not green.
 A report may recommend implementation but does not authorize it.
 Before treating the investigation or any visual review as complete, load `captain-hold-lifecycle`; teardown enforces that shared completion gate.
 When a scout's deliverable is a visual artifact the captain will iterate on, prefer keeping that scout alive to host its own Lavish loop rather than tearing it down and mediating from firstmate, so the scout keeps its investigation context and the captain iterates in one continuous session.
 When implementation is separately authorized, promote the existing scout through `bin/fm-promote.sh` rather than creating a duplicate task.
 The promoted worker must inventory scratch state, return to a clean default-branch base, carry over only intended fix changes, create the ship branch, and follow the project's selected delivery path while leaving scratch commits and debug edits behind and turning a reproduced bug into the regression test.
+`bin/fm-promote.sh` flips the contract without touching gates, so a gated scout needs a fresh ship `gates.md` written at promotion while its scout gate file and completed result are kept as history and never edited.
+Carry gates over explicitly: translate each still-applicable scout gate into a ship gate and record the mapping, so a reproduced bug becomes a gate on its regression test being present and green, and keep unresolved scout uncertainty as an explicit ship gate or a recorded risk rather than losing a negative finding.
 
 ## 8. Supervision protocol
 
