@@ -27,11 +27,12 @@ Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, whil
 ## Task gates (`data/<id>/gates.md` and `data/<id>/gates-result.md`)
 
 Firstmate owns the lifecycle of these two files.
-At intake, firstmate writes `data/<id>/gates.md` by hand before the brief, and an existing gate file requires scaffolding the brief with `bin/fm-brief.sh --gates`.
+At intake, firstmate writes `data/<id>/gates.md` by hand before the brief, and an existing gate file requires scaffolding that ship or scout brief with `bin/fm-brief.sh --gates`; a secondmate charter carries no gates and the flag is refused there.
 Workers read `gates.md` but never write it.
 `gates.md` contains gate declarations with expected outcomes, `CHECK`, `EXPECT`, and `EVIDENCE` fields, and optional `ABANDON` entries; `bin/fm-gates-check.sh`'s header is the single owner of their exact grammar and verdict semantics.
 At completion, firstmate runs `bin/fm-gates-check.sh <id>` against the task's isolated copy.
 The checker writes `data/<id>/gates-result.md`, which records `copy`, `head`, `checked`, and `timeout`, then per-gate verdicts with reasons and relevant output, and a summary with counts and exit code.
+A `gates.md` that declares no gate or carries any parse error earns file-level verdicts instead, and a parse error replaces every per-gate verdict because no `CHECK` runs; the checker's header spells those out.
 `gates-result.md` is the completion artifact and the checker's sole write target.
 The checker never edits `gates.md` or any file in the task's isolated copy; its header remains the single owner of both file layouts, verdict rules, and exit codes.
 
