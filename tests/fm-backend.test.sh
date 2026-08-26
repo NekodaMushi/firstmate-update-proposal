@@ -1113,6 +1113,54 @@ test_spawn_autodetect_nesting_resolves_tmux_silently() {
   pass "fm-spawn.sh: auto-detect resolves nested tmux-in-herdr to tmux and stays silent end to end"
 }
 
+
+# --- pid-tree agent scan: the relaunch handoff's fail-closed direction -------
+# fm_backend_pid_tree_agent_free runs AFTER the old agent has been stopped, so
+# `agent-free` licenses a replacement launch. Its process-name vocabulary is
+# sourced on first use, and a vocabulary that will not load leaves every process
+# unclassified - the one condition under which a fall-through would report a
+# tree it never actually read as agent-free.
+
+pid_tree_lab() {  # <name> -> echoes dir with a ps fake and an empty lib dir
+  local dir="$TMP_ROOT/$1"
+  mkdir -p "$dir/nolibs"
+  cat > "$dir/ps" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"-axo pid=,ppid=,args="*)
+    printf '900 1 /bin/zsh\n'
+    printf '901 900 -zsh\n'
+    exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$dir/ps"
+  printf '%s\n' "$dir"
+}
+
+run_pid_tree() {  # <lib-dir> <ps-bin>
+  bash -c '. "$0/bin/fm-backend.sh"
+    FM_BACKEND_LIB_DIR=$1
+    FM_BACKEND_PS_BIN=$2
+    fm_backend_pid_tree_agent_free 900' "$ROOT" "$1" "$2" 2>&1
+}
+
+test_pid_tree_refuses_when_the_process_vocabulary_cannot_load() {
+  local dir out rc
+  dir=$(pid_tree_lab pidtree-vocab)
+  out=$(run_pid_tree "$dir/nolibs" "$dir/ps"); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "a tree whose processes could not be classified must never read as agent-free: out=$out"
+  assert_contains "$out" "process-vocabulary-unreadable" \
+    "the refusal should name the classifier it could not load"
+  out=$(run_pid_tree "$ROOT/bin" "$dir/ps"); rc=$?
+  expect_code 0 "$rc" "the same tree with a loadable vocabulary is genuinely agent-free"$'\n'"$out"
+  assert_contains "$out" "pid-tree-agent-free" \
+    "the control case must pass, so the refusal above comes from the vocabulary, not the tree"
+  pass "fm_backend_pid_tree_agent_free: an unloadable process vocabulary refuses instead of reporting agent-free"
+}
+
+test_pid_tree_refuses_when_the_process_vocabulary_cannot_load
 test_backend_name_precedence
 test_backend_detect_precedence
 test_backend_detect_cmux_fallback_bundle_id

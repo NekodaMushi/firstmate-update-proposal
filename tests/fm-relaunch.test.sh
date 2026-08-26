@@ -262,15 +262,37 @@ test_refuses_when_the_pane_never_becomes_a_bare_shell() {
   pass "fm-relaunch: refuses while a harness is backgrounded behind the pane's foreground shell"
 }
 
+# fm_backend_shell_ready decides readiness from raw pane fields, and tmux
+# answers an absent target from the client's ACTIVE window rather than failing -
+# so without its own membership guard it would return a verdict about some other
+# pane. Driving the tmux half directly is the only way to reach that guard: the
+# end-to-end path refuses earlier, in agent_state, and would pass with the guard
+# deleted.
+run_shell_ready() {  # <case-dir> <target>
+  local dir=$1 target=$2
+  # shellcheck disable=SC2016  # $0/$1 belong to the inner bash -c process.
+  env PATH="$dir/fakebin:$PATH" FM_FAKE_DIR="$dir/fake" \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_shell_ready tmux "$1"' \
+    "$ROOT" "$target" 2>&1
+}
+
 test_refuses_when_the_recorded_window_is_gone() {
   local dir out rc
   dir=$(new_case window-gone rr11)
+  printf 'zsh' > "$dir/fake/command"
+  out=$(run_shell_ready "$dir" "fmses:fm-rr11"); rc=$?
+  expect_code 0 "$rc" "the recorded window is listed, so this fixture is otherwise ready"$'\n'"$out"
   : > "$dir/fake/windows"
+  out=$(run_shell_ready "$dir" "fmses:fm-rr11"); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "a window absent from the inventory must never yield a readiness verdict: out=$out"
+  assert_contains "$out" "window-missing" \
+    "the refusal must name the absent window, not describe whichever pane tmux answered from"
   out=$(run_relaunch "$dir" rr11); rc=$?
-  expect_code 1 "$rc" "a vanished window must never yield a readiness verdict"
+  expect_code 1 "$rc" "the relaunch itself must refuse a vanished window"
   assert_no_grep 'encode launch-brief' "$dir/fake/literal" \
     "a replacement must not launch into a window the inventory no longer lists"
-  pass "fm-relaunch: a recorded window absent from the session inventory refuses"
+  pass "fm-relaunch: a recorded window absent from the session inventory refuses before any readiness verdict"
 }
 
 test_relaunches_over_the_treehouse_subshell_chain() {

@@ -969,10 +969,14 @@ fm_backend_classify_process_name() {  # <path> [argv0] -> agent|shell|other
 # -m 'claude review'`) is never mistaken for a running harness.
 #
 # A tree that cannot be read is never reported as agent-free: an absent ps, an
-# unreadable process table, or a table that does not contain <root-pid> all
-# refuse. Prints a reason token on refusal and `pid-tree-agent-free` on success.
+# unreadable process table, a table that does not contain <root-pid>, and a
+# process-name vocabulary that will not load all refuse. The vocabulary is
+# loaded once up front rather than per process, because a classifier that
+# cannot answer must refuse the whole tree - a classification this scan could
+# not make is exactly the case a fall-through would silently read as agent-free.
+# Prints a reason token on refusal and `pid-tree-agent-free` on success.
 fm_backend_pid_tree_agent_free() {  # <root-pid>
-  local root=$1 ps_bin rows argv0s argv0
+  local root=$1 ps_bin rows argv0s argv0 class
   case "$root" in
     ''|*[!0-9]*) printf 'no-root-pid'; return 1 ;;
   esac
@@ -1007,9 +1011,13 @@ fm_backend_pid_tree_agent_free() {  # <root-pid>
       }
     }
   ') || { printf 'process-tree-unreadable'; return 1; }
+  _fm_backend_process_vocabulary_ready \
+    || { printf 'process-vocabulary-unreadable'; return 1; }
   while IFS= read -r argv0; do
     [ -n "$argv0" ] || continue
-    if [ "$(fm_backend_classify_process_name "$argv0" "$argv0")" = agent ]; then
+    class=$(fm_backend_classify_process_name "$argv0" "$argv0") \
+      || { printf 'process-vocabulary-unreadable'; return 1; }
+    if [ "$class" = agent ]; then
       printf 'agent-in-pane-tree'
       return 1
     fi

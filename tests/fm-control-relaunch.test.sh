@@ -80,6 +80,10 @@ case "${1:-}" in
             printf '%s' "$FM_FAKE_EXIT_REAP_DELAY" > "$D/reap-countdown"
             exit 1
           fi
+          # FM_FAKE_EXIT_TRANSPORT_FAIL_ALIVE is the genuine transport
+          # failure: the keystrokes never reached the pane, so the agent is
+          # still running when the bounded postcondition expires.
+          [ -z "${FM_FAKE_EXIT_TRANSPORT_FAIL_ALIVE:-}" ] || exit 1
           printf 'zsh' > "$D/command"
           [ -z "${FM_FAKE_EXIT_TRANSPORT_FAIL_AFTER_STOP:-}" ] || exit 1
           ;;
@@ -1057,6 +1061,28 @@ test_stop_transport_failure_reconciles_a_dead_agent() {
   pass "fm-control relaunch: a verified exit postcondition resolves an ambiguous transport result"
 }
 
+test_stop_transport_failure_with_a_live_agent_refuses() {
+  local dir out rc
+  dir=$(new_case stoplive rl31)
+  add_ship_task "$dir" rl31 claude
+  out=$(FM_FAKE_EXIT_TRANSPORT_FAIL_ALIVE=1 \
+    run_control "$dir" rl31 relaunch --note "never reached the pane"); rc=$?
+  expect_code 1 "$rc" "a send failure whose agent is still alive is a real transport failure"$'\n'"$out"
+  assert_contains "$out" "the exit command could not be sent to task rl31" \
+    "the refusal should name the transport failure, not an unconfirmed exit"
+  assert_contains "$out" "error: text not sent" \
+    "fm-send's own diagnosis must survive to the operator"
+  [ "$(cat "$dir/fake/command")" = claude ] \
+    || fail "a failed exit must leave the original agent running"
+  assert_no_grep 'encode launch-brief' "$dir/fake/literal" \
+    "no replacement may launch when the old agent was never stopped"
+  [ "$(journal_field "$dir" rl31 phase)" = failed:stopping ] \
+    || fail "the journal should record the failure while stopping"
+  [ "$(journal_field "$dir" rl31 rollback)" = instructions-restored-agent-alive ] \
+    || fail "a still-running agent's original instructions should be restored"
+  pass "fm-control relaunch: a transport failure with a live agent refuses and keeps the agent"
+}
+
 test_stop_reconciles_an_unread_verdict_before_the_agent_is_reaped() {
   local dir out rc
   dir=$(new_case reaprace rl26)
@@ -1418,6 +1444,7 @@ test_launch_failure_keeps_the_prior_record_and_reports_it
 test_prepublication_failure_keeps_concurrent_durable_metadata
 test_post_publication_launch_failure_keeps_the_new_record
 test_stop_transport_failure_reconciles_a_dead_agent
+test_stop_transport_failure_with_a_live_agent_refuses
 test_stop_reconciles_an_unread_verdict_before_the_agent_is_reaped
 test_complete_journal_failure_rolls_back_from_durable_phase
 test_prepublication_abort_retires_replacement_wiring_and_busy_state
