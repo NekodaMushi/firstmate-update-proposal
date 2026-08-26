@@ -6,11 +6,14 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab] [--gates]
+#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab] [--gates]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
+#   --gates adds the worker contract for the firstmate-owned acceptance gates at
+#   data/<task-id>/gates.md. It applies to ship and scout briefs, never secondmates.
+#   See docs/configuration.md "Task gates" for the schema-owner reference.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
 #   tells the main firstmate when to route work there; routine churn stays in its own home;
@@ -103,6 +106,7 @@ else
 fi
 KIND=ship
 HERDR_LAB=0
+GATES=0
 NO_PROJECTS=0
 MODE=
 MODE_SET=0
@@ -124,6 +128,7 @@ for a in "$@"; do
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
+    --gates) GATES=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
@@ -158,6 +163,11 @@ ID=${POS[0]}
 
 if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
   echo "error: --herdr-lab applies only to crewmate ship or scout briefs" >&2
+  exit 1
+fi
+
+if [ "$KIND" = secondmate ] && [ "$GATES" -eq 1 ]; then
+  echo "error: --gates applies only to crewmate ship or scout briefs; secondmate charters cannot carry task gates" >&2
   exit 1
 fi
 
@@ -266,6 +276,24 @@ fi
 
 REPO=${POS[1]}
 
+GATES_INSERT=
+if [ "$GATES" -eq 1 ]; then
+IFS= read -r -d '' GATES_SECTION <<EOF || true
+# Acceptance gates
+\`$DATA/$ID/gates.md\` is authoritative for this task.
+Read it, but do not edit it.
+Do not create or modify \`$DATA/$ID/gates-result.md\` yourself; if you run the checker below, the checker alone owns that result-file write.
+Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so validation and CI run it.
+For a scout, record the proposed test in the report so it can land if the scout is promoted; do not open a PR.
+You may run \`$FM_ROOT/bin/fm-gates-check.sh $ID\` to gauge progress, but only firstmate's run counts.
+A \`done:\` status means only "I believe the gates pass", not "the task is finished"; firstmate runs the checker before starting validation.
+If you believe a gate is impossible, append \`blocked: gate <gate-id> impossible - <reason>\` to the status file.
+Never abandon a gate silently, and never write an abandonment into \`$DATA/$ID/gates.md\`.
+EOF
+GATES_SECTION=${GATES_SECTION%$'\n'}
+GATES_INSERT=$'\n\n'"$GATES_SECTION"
+fi
+
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
 # shellcheck disable=SC2016  # single quotes are deliberate: these lines are literal brief text whose backtick-wrapped $(...) and "$HERDR_LAB_SESSION" snippets must reach the reading agent verbatim, not expand at scaffold time; only the '"$VAR"' break-outs interpolate.
@@ -303,7 +331,7 @@ cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 # Task
-{TASK}
+{TASK}$GATES_INSERT
 
 $HERDR_SECTION
 
@@ -414,7 +442,7 @@ cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 # Task
-{TASK}
+{TASK}$GATES_INSERT
 
 $HERDR_SECTION
 

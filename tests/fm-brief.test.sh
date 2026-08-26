@@ -174,7 +174,90 @@ test_help_includes_entire_header() {
   local help
   help=$("$ROOT/bin/fm-brief.sh" --help)
   assert_contains "$help" "Refuses to overwrite an existing brief." "fm-brief.sh --help omitted its header terminator"
+  assert_contains "$help" "--gates" "fm-brief.sh --help omitted the gates option"
+  assert_contains "$help" "docs/configuration.md \"Task gates\"" \
+    "fm-brief.sh --help did not point to the gate schema reference"
   pass "fm-brief.sh: --help renders the complete header"
+}
+
+# The no-option scaffold is a checked-in capture from immediately before
+# --gates was added. Normalize only the two caller-specific absolute roots, then
+# compare the executable's public output byte for byte so the opt-in feature
+# cannot perturb an ordinary scaffold by even one newline.
+test_no_gates_output_is_byte_identical_to_baseline() {
+  local home brief normalized
+  home="$TMP_ROOT/no-gates-baseline-home"
+  mkdir -p "$home/data" "$home/state"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" fixture-no-gates fixture-repo --mode no-mistakes >/dev/null 2>&1 \
+    || fail "ordinary brief failed while checking the pre-option baseline"
+  brief="$home/data/fixture-no-gates/brief.md"
+  normalized="$TMP_ROOT/no-gates-normalized.md"
+  FM_FIXTURE_HOME="$home" FM_FIXTURE_ROOT="$ROOT" perl -pe \
+    's/\Q$ENV{FM_FIXTURE_HOME}\E/<FM_HOME>/g; s/\Q$ENV{FM_FIXTURE_ROOT}\E/<FM_ROOT>/g' \
+    "$brief" > "$normalized"
+  cmp -s "$ROOT/tests/fixtures/fm-brief/no-gates.md" "$normalized" \
+    || fail "fm-brief.sh without --gates changed from the byte-exact pre-option scaffold"
+  assert_no_grep "# Acceptance gates" "$brief" \
+    "ordinary brief unexpectedly gained the opt-in acceptance-gates section"
+  pass "fm-brief.sh: omitting --gates preserves the prior scaffold byte for byte"
+}
+
+# --gates is one shared worker contract for ships and scouts. Herdr isolation is
+# orthogonal, while persistent secondmates have no task gate file and must refuse
+# the option instead of accepting and discarding it.
+test_gates_contract_and_kind_compatibility() {
+  local home ship scout out status
+  home="$TMP_ROOT/gates-option-home"
+  mkdir -p "$home/data" "$home/state"
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" gated-ship fixture-repo --gates --mode no-mistakes --herdr-lab >/dev/null 2>&1 \
+    || fail "ship --gates --herdr-lab scaffold failed"
+  ship="$home/data/gated-ship/brief.md"
+  assert_grep "# Acceptance gates" "$ship" "ship --gates brief omitted its section"
+  assert_grep "\`$home/data/gated-ship/gates.md\` is authoritative" "$ship" \
+    "gates section did not name the authoritative task file"
+  assert_grep "Read it, but do not edit it." "$ship" \
+    "gates section did not make gates.md read-only to the worker"
+  assert_grep "Do not create or modify \`$home/data/gated-ship/gates-result.md\` yourself" "$ship" \
+    "gates section did not reserve gates-result.md for the checker"
+  assert_grep "every gate that can be expressed as an automated test" "$ship" \
+    "gates section did not require automatable gates to land as tests"
+  assert_grep "validation and CI run it" "$ship" \
+    "gates section did not connect tests to validation and CI"
+  assert_grep "\`$ROOT/bin/fm-gates-check.sh gated-ship\`" "$ship" \
+    "gates section did not provide the optional progress checker"
+  assert_grep "only firstmate's run counts" "$ship" \
+    "gates section did not reserve the decisive checker pass for firstmate"
+  assert_grep "A \`done:\` status means only \"I believe the gates pass\"" "$ship" \
+    "gates section overstated the worker's done status"
+  assert_grep "firstmate runs the checker before starting validation" "$ship" \
+    "gates section omitted the pre-validation firstmate check"
+  assert_grep "blocked: gate <gate-id> impossible - <reason>" "$ship" \
+    "gates section did not prescribe an impossible-gate status"
+  assert_grep "Never abandon a gate silently" "$ship" \
+    "gates section allowed silent gate abandonment"
+  assert_grep "# Herdr isolation - HARD SAFETY CONTRACT" "$ship" \
+    "--gates displaced the Herdr lab contract"
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" gated-scout fixture-repo --scout --gates >/dev/null 2>&1 \
+    || fail "scout --gates scaffold failed"
+  scout="$home/data/gated-scout/brief.md"
+  assert_grep "# Acceptance gates" "$scout" "scout --gates brief omitted its section"
+  assert_grep "For a scout, record the proposed test in the report" "$scout" \
+    "scout gates contract did not preserve its report-only delivery path"
+  assert_grep "SCOUT task" "$scout" "--gates displaced the scout contract"
+
+  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" gated-mate --secondmate --no-projects --gates 2>&1)
+  status=$?
+  expect_code 1 "$status" "secondmate --gates must be rejected"
+  assert_contains "$out" "--gates applies only to crewmate ship or scout briefs" \
+    "secondmate --gates refusal was not clear"
+  assert_absent "$home/data/gated-mate/brief.md" \
+    "rejected secondmate --gates still wrote a charter"
+  pass "fm-brief.sh: --gates covers ship/scout and composes with --herdr-lab, but rejects secondmates"
 }
 
 # Registry with one project per delivery mode. fm-brief.sh no longer reads it -
@@ -715,6 +798,8 @@ test_scout_and_secondmate_scaffold() {
 test_script_parses
 test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
+test_no_gates_output_is_byte_identical_to_baseline
+test_gates_contract_and_kind_compatibility
 test_ship_modes_generate_clean_briefs
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
