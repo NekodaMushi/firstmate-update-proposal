@@ -83,8 +83,8 @@ Switching harness is therefore one ordinary relaunch rather than a separate mech
 ### Failure and rollback
 
 - A refusal **before** the agent is stopped leaves the durable record and the instructions byte-identical.
-- A bare-shell proof that does not hold within its bounded wait stops there: the old agent is stopped, no replacement is launched, the journal keeps the `stopping` phase, and the refusal names the state that blocked it.
-  Rollback reports plainly that no agent is running and where the work is preserved, exactly as for a launch failure.
+- A bare-shell proof that does not hold within its bounded wait stops there: the old agent is stopped, no replacement is launched, and the refusal names the state that blocked it.
+  Rollback marks the journal `failed:stopping`, keeps the prior durable record, and reports plainly that no agent is running and where the work is preserved, exactly as for a launch failure.
 - A launch failure **after** the agent is stopped restores the prior durable record, keeps the progress note so a later recovery still has it, marks the journal `failed:launching`, and reports plainly that no agent is running and where the work is preserved.
 - If the launch owner already published the new record but no running agent can be confirmed, the new record is kept: the task is recorded on the new harness with no agent confirmed, which is exactly what recovery reconciles.
   Rewriting it back to the old harness would be a second, worse inaccuracy.

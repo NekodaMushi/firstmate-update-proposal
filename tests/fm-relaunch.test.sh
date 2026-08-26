@@ -254,10 +254,23 @@ test_refuses_when_the_pane_never_becomes_a_bare_shell() {
   expect_code 1 "$rc" "a harness still running under the pane must refuse"
   assert_contains "$out" "did not become a verifiable bare shell" \
     "the refusal should name the unproven shell readiness, not the agent exit"
+  assert_contains "$out" "agent-in-pane-tree" \
+    "the refusal must come from the process tree, since the foreground alone looks ready"
   assert_no_grep 'encode launch-brief' "$dir/fake/literal" "a replacement must not launch before bare-shell proof"
   [ "$(cat "$dir/fake/command")" = zsh ] \
-    || fail "this fixture must put a shell in the foreground, so only the process tree is unclean"
-  pass "fm-relaunch: refuses without launching while a harness is still alive under the pane"
+    || fail "this fixture must put a shell in the foreground, so only the background is unclean"
+  pass "fm-relaunch: refuses while a harness is backgrounded behind the pane's foreground shell"
+}
+
+test_refuses_when_the_recorded_window_is_gone() {
+  local dir out rc
+  dir=$(new_case window-gone rr11)
+  : > "$dir/fake/windows"
+  out=$(run_relaunch "$dir" rr11); rc=$?
+  expect_code 1 "$rc" "a vanished window must never yield a readiness verdict"
+  assert_no_grep 'encode launch-brief' "$dir/fake/literal" \
+    "a replacement must not launch into a window the inventory no longer lists"
+  pass "fm-relaunch: a recorded window absent from the session inventory refuses"
 }
 
 test_relaunches_over_the_treehouse_subshell_chain() {
@@ -357,6 +370,7 @@ test_refuses_while_a_no_mistakes_run_owns_the_branch() {
 
 test_successful_relaunch_preserves_the_same_worktree
 test_refuses_when_the_pane_never_becomes_a_bare_shell
+test_refuses_when_the_recorded_window_is_gone
 test_relaunches_over_the_treehouse_subshell_chain
 test_relaunches_when_a_child_only_mentions_a_harness_in_its_arguments
 test_relaunches_under_an_exotic_shell_prompt

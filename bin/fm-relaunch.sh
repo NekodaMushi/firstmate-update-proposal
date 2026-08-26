@@ -84,6 +84,14 @@ case "$FM_RELAUNCH_RUNS_LIMIT" in ''|*[!0-9]*) FM_RELAUNCH_RUNS_LIMIT=200 ;; esa
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# shellcheck source=bin/fm-gate-refuse-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-gate-refuse-lib.sh"
+
+# A no-mistakes gate agent runs inside a crewmate's own validation and must never
+# drive a crewmate's lifecycle (see bin/fm-gate-refuse-lib.sh). Refuse before
+# reading any task record, querying the run, or shelling out to crew-state, not
+# just before the exec that would mutate the fleet.
+fm_refuse_if_gate_agent
 
 fm_task_id_creation_valid "$ID" || {
   echo "error: invalid task id '$ID'" >&2
