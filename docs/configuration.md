@@ -26,12 +26,14 @@ Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, whil
 
 ## Task gates (`data/<id>/gates.md` and `data/<id>/gates-result.md`)
 
-A task may carry an acceptance-gate file at `data/<id>/gates.md`, next to the task's brief.
-Firstmate writes it at intake by hand; no command generates it yet.
-Write it before the task's brief: `bin/fm-brief.sh --gates`, whose header owns the flag and the worker-side contract it emits, refuses to scaffold without the gate file, so no brief calls an absent one authoritative.
-`bin/fm-gates-check.sh <id>` runs every `CHECK:` inside the task's isolated copy resolved from `worktree=` in `state/<id>.meta`, under a per-command timeout, and writes the verdicts to `data/<id>/gates-result.md`.
-That script's header is the single owner of both file formats, the verdict rules, and the exit codes.
-The checker never edits `gates.md` or any file in the copy; `gates-result.md` is the only file it writes.
+Firstmate owns the lifecycle of these two files.
+At intake, firstmate writes `data/<id>/gates.md` by hand before the brief, and an existing gate file requires scaffolding the brief with `bin/fm-brief.sh --gates`.
+Workers read `gates.md` but never write it.
+`gates.md` contains gate declarations with expected outcomes, `CHECK`, `EXPECT`, and `EVIDENCE` fields, and optional `ABANDON` entries; `bin/fm-gates-check.sh`'s header is the single owner of their exact grammar and verdict semantics.
+At completion, firstmate runs `bin/fm-gates-check.sh <id>` against the task's isolated copy.
+The checker writes `data/<id>/gates-result.md`, which records `copy`, `head`, `checked`, and `timeout`, then per-gate verdicts with reasons and relevant output, and a summary with counts and exit code.
+`gates-result.md` is the completion artifact and the checker's sole write target.
+The checker never edits `gates.md` or any file in the task's isolated copy; its header remains the single owner of both file layouts, verdict rules, and exit codes.
 
 ## Pi Calm preference (config/calm)
 

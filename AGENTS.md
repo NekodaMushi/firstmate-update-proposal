@@ -291,6 +291,9 @@ Record the resulting mode, `yolo` merge posture, and the one-line reason for any
 
 Treat file or subsystem overlap as a risk signal rather than an automatic reason to wait, and dispatch isolated work immediately with no concurrency cap when each change can be independently implemented and validated and the selected delivery path can reconcile ordinary rebases or conflicts.
 Serialize only for a true semantic dependency, shared mutable external state, incompatible concurrent migration, or another concrete condition that makes independent progress or reconciliation unsafe; same-file editing alone is insufficient, and genuine blockers remain durable.
+For a gated task, firstmate writes `data/<task-id>/gates.md` at intake using the `CHECK`, `EXPECT`, `EVIDENCE`, and `ABANDON` contract owned by `bin/fm-gates-check.sh`; the worker reads this file but never writes it.
+Any gate that can be translated into an executable test lands as a test in the delivery.
+At completion, firstmate runs `bin/fm-gates-check.sh <task-id>` and treats `data/<task-id>/gates-result.md` as the completion artifact.
 Write the task-specific brief under section 11 before spawning.
 
 ### Dispatch and supervision handoff
@@ -507,6 +510,7 @@ Use its scaffold as the contract, then replace every `{TASK}` placeholder with a
 Keep additions task-specific rather than repeating lifecycle instructions, and alter generated sections only when the task genuinely differs from the standard shape.
 
 Every ship brief must retain the worktree-isolation assertion and stop if launched in the primary checkout.
+For every ship or scout brief, when `data/<task-id>/gates.md` exists, invoke `bin/fm-brief.sh` with `--gates` before spawning; the scaffold cannot detect an omitted flag.
 If a ship task touches firstmate's shared tracked material, explicitly require `firstmate-coding-guidelines` before editing.
 If a task will drive Herdr lifecycle behavior, scaffold with `--herdr-lab`; if that need appears after an unguarded scaffold, stop and regenerate rather than adding commands by hand.
 The generated Herdr contract must use a named non-`default` isolated lab and its guarded helper for every lifecycle action.
