@@ -180,11 +180,23 @@ test_help_includes_entire_header() {
   pass "fm-brief.sh: --help renders the complete header"
 }
 
+# Every scaffold below seeds real files under the home it names, so an ambient
+# home override or pause-verb export would decide where the script writes and read
+# back as a byte change or a missing gate file. Pin them out of the way.
+run_brief() {
+  local home=$1
+  shift
+  env -u FM_CLASSIFY_PAUSED_VERB -u FM_DATA_OVERRIDE -u FM_STATE_OVERRIDE \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-brief.sh" "$@"
+}
+
 # The no-option scaffolds are checked-in captures from immediately before
 # --gates was added, one per heredoc the option interpolates into. Normalize only
 # the two caller-specific absolute roots, then compare the executable's public
 # output byte for byte so the opt-in feature cannot perturb an ordinary scaffold
-# by even one newline.
+# by even one newline. The captures are of default behavior, so every other
+# variable the scaffold reads is cleared: an ambient FM_CLASSIFY_PAUSED_VERB or
+# home override otherwise fails the guard for a reason that is not a byte change.
 test_no_gates_output_is_byte_identical_to_baseline() {
   local case_spec id fixture brief normalized home
   home="$TMP_ROOT/no-gates-baseline-home"
@@ -196,8 +208,7 @@ test_no_gates_output_is_byte_identical_to_baseline() {
     id=${case_spec%%|*}
     fixture=${case_spec#*|}; fixture=${fixture%%|*}
     # shellcheck disable=SC2086  # the flag list is a deliberate word-split fixture argument.
-    FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-      "$ROOT/bin/fm-brief.sh" "$id" fixture-repo ${case_spec##*|} >/dev/null 2>&1 \
+    run_brief "$home" "$id" fixture-repo ${case_spec##*|} >/dev/null 2>&1 \
       || fail "ordinary $id brief failed while checking the pre-option baseline"
     brief="$home/data/$id/brief.md"
     normalized="$TMP_ROOT/$id-normalized.md"
@@ -236,8 +247,7 @@ test_gates_contract_and_kind_compatibility() {
   seed_gates "$home" gated-scout
   seed_gates "$home" gated-mate
 
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-brief.sh" gated-ship fixture-repo --gates --mode no-mistakes --herdr-lab >/dev/null 2>&1 \
+  run_brief "$home" gated-ship fixture-repo --gates --mode no-mistakes --herdr-lab >/dev/null 2>&1 \
     || fail "ship --gates --herdr-lab scaffold failed"
   ship="$home/data/gated-ship/brief.md"
   assert_grep "# Acceptance gates" "$ship" "ship --gates brief omitted its section"
@@ -270,8 +280,7 @@ test_gates_contract_and_kind_compatibility() {
   assert_no_grep "in the report as a proposed test" "$ship" \
     "ship gates section carried the scout-only report carve-out"
 
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-brief.sh" gated-scout fixture-repo --scout --gates >/dev/null 2>&1 \
+  run_brief "$home" gated-scout fixture-repo --scout --gates >/dev/null 2>&1 \
     || fail "scout --gates scaffold failed"
   scout="$home/data/gated-scout/brief.md"
   assert_grep "# Acceptance gates" "$scout" "scout --gates brief omitted its section"
@@ -283,7 +292,7 @@ test_gates_contract_and_kind_compatibility() {
   assert_grep "that write is the checker's and firstmate's to judge" "$scout" \
     "gated scout Rule 2 did not account for the checker's result write"
 
-  out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" gated-mate --secondmate --no-projects --gates 2>&1)
+  out=$(run_brief "$home" gated-mate --secondmate --no-projects --gates 2>&1)
   status=$?
   expect_code 1 "$status" "secondmate --gates must be rejected"
   assert_contains "$out" "--gates applies only to crewmate ship or scout briefs" \
@@ -305,8 +314,7 @@ test_gates_landing_instruction_matches_delivery_contract() {
   seed_gates "$home" gated-direct
   seed_gates "$home" gated-report
 
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-brief.sh" gated-local fixture-repo --gates --mode local-only >/dev/null 2>&1 \
+  run_brief "$home" gated-local fixture-repo --gates --mode local-only >/dev/null 2>&1 \
     || fail "local-only --gates scaffold failed"
   brief="$home/data/gated-local/brief.md"
   assert_grep "Do NOT push, do NOT open a PR" "$brief" \
@@ -315,16 +323,24 @@ test_gates_landing_instruction_matches_delivery_contract() {
     "local-only gates section did not point automatable gates at the branch"
   assert_no_grep "test committed in the eventual PR" "$brief" \
     "local-only gates section demanded a PR the same brief forbids"
+  assert_grep "firstmate runs the checker before accepting the ready branch" "$brief" \
+    "local-only gates section did not tie the decisive check to the ready branch"
+  assert_no_grep "before starting validation" "$brief" \
+    "local-only gates section named a validation phase the same brief forbids"
 
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-brief.sh" gated-direct fixture-repo --gates --mode direct-PR >/dev/null 2>&1 \
+  run_brief "$home" gated-direct fixture-repo --gates --mode direct-PR >/dev/null 2>&1 \
     || fail "direct-PR --gates scaffold failed"
   brief="$home/data/gated-direct/brief.md"
   assert_grep "test committed in the eventual PR" "$brief" \
     "direct-PR gates section dropped the PR-test requirement"
+  assert_grep "Do NOT run /no-mistakes" "$brief" \
+    "direct-PR brief lost its no-pipeline delivery contract"
+  assert_grep "firstmate runs the checker before the merge authority decides on the PR" "$brief" \
+    "direct-PR gates section did not tie the decisive check to the merge decision"
+  assert_no_grep "before starting validation" "$brief" \
+    "direct-PR gates section named a validation phase the same brief forbids"
 
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-brief.sh" gated-report fixture-repo --scout --gates >/dev/null 2>&1 \
+  run_brief "$home" gated-report fixture-repo --scout --gates >/dev/null 2>&1 \
     || fail "scout --gates scaffold failed"
   brief="$home/data/gated-report/brief.md"
   assert_grep "in the report as a proposed test" "$brief" \
@@ -353,8 +369,7 @@ test_emitted_gates_check_command_pins_the_home() {
     '  EVIDENCE: pending' > "$home/data/gated-check/gates.md"
   printf 'worktree=%s\n' "$copy" > "$home/state/gated-check.meta"
 
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-brief.sh" gated-check fixture-repo --gates --mode no-mistakes >/dev/null 2>&1 \
+  run_brief "$home" gated-check fixture-repo --gates --mode no-mistakes >/dev/null 2>&1 \
     || fail "ship --gates scaffold failed"
   brief="$home/data/gated-check/brief.md"
 
@@ -388,9 +403,8 @@ test_boolean_flags_reject_a_value_instead_of_dropping_it() {
   mkdir -p "$home/data" "$home/state"
   seed_gates "$home" flag-value
 
-  for spelling in --gates=1 --gates=true --herdr-lab=1 --scout=yes --typo; do
-    out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-      "$ROOT/bin/fm-brief.sh" flag-value fixture-repo --mode no-mistakes "$spelling" 2>&1)
+  for spelling in --gates=1 --gates=true --herdr-lab=1 --scout=yes --typo -gates -herdr-lab -; do
+    out=$(run_brief "$home" flag-value fixture-repo --mode no-mistakes "$spelling" 2>&1)
     status=$?
     expect_code 1 "$status" "$spelling was accepted instead of refused ($out)"
     assert_contains "$out" "error:" "$spelling produced no error message"
@@ -398,12 +412,65 @@ test_boolean_flags_reject_a_value_instead_of_dropping_it() {
       "$spelling was swallowed and a brief was scaffolded anyway"
   done
 
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-brief.sh" flag-value fixture-repo --mode no-mistakes --gates >/dev/null 2>&1 \
+  # A secondmate's project list is variadic, so arity cannot catch a lost dash
+  # there; only the option arm can. Same for a crewmate whose dashed word lands
+  # in the two positions the scaffold does read.
+  out=$(run_brief "$home" flag-mate --secondmate -herdr-lab 2>&1)
+  status=$?
+  expect_code 1 "$status" "a single-dash flag was accepted as a secondmate project name ($out)"
+  assert_absent "$home/data/flag-mate/brief.md" \
+    "a single-dash flag was filed as a project name and a charter was written"
+
+  out=$(run_brief "$home" --scout -gates fixture-repo 2>&1)
+  status=$?
+  expect_code 1 "$status" "a single-dash flag was accepted as a crewmate task id ($out)"
+
+  run_brief "$home" flag-value fixture-repo --mode no-mistakes --gates >/dev/null 2>&1 \
     || fail "the bare --gates spelling stopped working"
   assert_grep "# Acceptance gates" "$home/data/flag-value/brief.md" \
     "the bare --gates spelling no longer emits the contract"
   pass "fm-brief.sh: a valued boolean flag or unknown option is refused, never filed as a positional"
+}
+
+# Only <task-id> and <repo-name> are ever read back from a crewmate's positional
+# list, so a third one is a stray word or a flag that lost its dashes - the same
+# silent drop, arriving through the positional door instead of the option door.
+# Too few is the mirror case, and used to surface as a raw unbound-variable crash.
+test_crewmate_arity_is_exact_so_nothing_goes_unread() {
+  local home out status
+  home="$TMP_ROOT/arity-home"
+  mkdir -p "$home/data" "$home/state"
+
+  out=$(run_brief "$home" arity-extra fixture-repo gates --mode no-mistakes 2>&1)
+  status=$?
+  expect_code 1 "$status" "a surplus crewmate positional was accepted ($out)"
+  assert_contains "$out" "gates" "the refusal did not name the argument it could not read"
+  assert_absent "$home/data/arity-extra/brief.md" \
+    "the surplus positional was swallowed and a brief was scaffolded anyway"
+
+  out=$(run_brief "$home" arity-short --mode no-mistakes 2>&1)
+  status=$?
+  expect_code 1 "$status" "a crewmate brief with no repo name was accepted ($out)"
+  assert_contains "$out" "<repo-name>" "the missing-argument refusal did not say what was missing"
+
+  out=$(run_brief "$home" --scout 2>&1)
+  status=$?
+  expect_code 1 "$status" "a scout brief with no positionals was accepted ($out)"
+  assert_contains "$out" "<task-id>" "the empty-argument refusal did not say what was missing"
+  case "$out" in
+    *"unbound variable"*) fail "an empty argument list still crashes instead of reporting the missing argument" ;;
+  esac
+
+  out=$(run_brief "$home" --secondmate --no-projects 2>&1)
+  status=$?
+  expect_code 1 "$status" "a secondmate charter with no task id was accepted ($out)"
+  assert_contains "$out" "<task-id>" "the secondmate refusal did not say what was missing"
+
+  run_brief "$home" arity-mate --secondmate proj-a proj-b >/dev/null 2>&1 \
+    || fail "the arity check broke a secondmate charter's variadic project list"
+  assert_grep "proj-b" "$home/data/arity-mate/brief.md" \
+    "the secondmate project list stopped reaching the charter"
+  pass "fm-brief.sh: a crewmate takes exactly two positionals and a secondmate keeps its project list"
 }
 
 # --gates declares data/<id>/gates.md authoritative, but nothing generates that
@@ -415,8 +482,7 @@ test_gates_requires_the_gate_file_to_exist() {
   home="$TMP_ROOT/gates-missing-home"
   mkdir -p "$home/data" "$home/state"
 
-  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-brief.sh" ungated-task fixture-repo --gates --mode no-mistakes 2>&1)
+  out=$(run_brief "$home" ungated-task fixture-repo --gates --mode no-mistakes 2>&1)
   status=$?
   expect_code 1 "$status" "--gates scaffolded a brief for a task with no gates.md ($out)"
   assert_contains "$out" "$home/data/ungated-task/gates.md" \
@@ -425,14 +491,12 @@ test_gates_requires_the_gate_file_to_exist() {
     "the refused --gates run still wrote a brief"
 
   seed_gates "$home" ungated-task
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-brief.sh" ungated-task fixture-repo --gates --mode no-mistakes >/dev/null 2>&1 \
+  run_brief "$home" ungated-task fixture-repo --gates --mode no-mistakes >/dev/null 2>&1 \
     || fail "--gates refused a task whose gates.md exists"
   assert_grep "# Acceptance gates" "$home/data/ungated-task/brief.md" \
     "the gated brief lost its section once the gate file existed"
 
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-brief.sh" plain-task fixture-repo --mode no-mistakes >/dev/null 2>&1 \
+  run_brief "$home" plain-task fixture-repo --mode no-mistakes >/dev/null 2>&1 \
     || fail "the gate-file precondition leaked onto an un-gated brief"
   pass "fm-brief.sh: --gates refuses to declare an absent gate file authoritative"
 }
@@ -981,6 +1045,7 @@ test_gates_landing_instruction_matches_delivery_contract
 test_emitted_gates_check_command_pins_the_home
 test_boolean_flags_reject_a_value_instead_of_dropping_it
 test_gates_requires_the_gate_file_to_exist
+test_crewmate_arity_is_exact_so_nothing_goes_unread
 test_ship_modes_generate_clean_briefs
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry

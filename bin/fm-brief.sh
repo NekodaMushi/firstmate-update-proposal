@@ -15,7 +15,9 @@
 #   data/<task-id>/gates.md. It applies to ship and scout briefs, never secondmates.
 #   Where an automatable gate lands follows the brief's own delivery path: the PR
 #   for a no-mistakes or direct-PR ship, the task branch for local-only, the report
-#   for a scout. The emitted fm-gates-check.sh invocation carries this home's
+#   for a scout; when firstmate's decisive run happens follows the same path, since
+#   only a no-mistakes ship has a validation phase.
+#   The emitted fm-gates-check.sh invocation carries this home's
 #   FM_HOME/FM_DATA_OVERRIDE/FM_STATE_OVERRIDE, because a crewmate pane does not
 #   inherit them and the checker exits 0 on a home holding no gates.md.
 #   The gate file must already exist: --gates refuses to scaffold without it, so
@@ -54,9 +56,11 @@
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # --mode is refused on scout and secondmate scaffolds: a scout's deliverable is a
 # report rather than a merge, and a charter is not a delivery contract.
-# Every flag but --mode is a bare boolean: a `--flag=value` spelling and any
-# unrecognised `--option` are refused rather than filed as a positional, so a
-# misspelled --gates or --herdr-lab can never be dropped behind a success message.
+# Every flag but --mode is a bare boolean: a `--flag=value` spelling, a single-dash
+# spelling, and any unrecognised option are refused rather than filed as a
+# positional, and a crewmate brief refuses a third positional the scaffold would
+# never read. So a misspelled --gates or --herdr-lab, whatever the spelling, can
+# never be dropped behind a success message.
 # There is no --yolo flag here. The worker never owns merge decisions, so yolo is
 # a spawn-time and firstmate-side input only (AGENTS.md section 7).
 # Every scaffold's status protocol distinguishes the configured
@@ -155,7 +159,7 @@ for a in "$@"; do
     # --yolo, and the failure the --herdr-lab declaration exists to prevent.
     --gates=*|--scout=*|--secondmate=*|--herdr-lab=*|--no-projects=*)
       echo "error: ${a%%=*} is a bare boolean flag and takes no value; drop the '=${a#*=}'" >&2; exit 1 ;;
-    --*) echo "error: unknown option $a (see --help)" >&2; exit 1 ;;
+    -*) echo "error: unknown option $a (see --help)" >&2; exit 1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -178,6 +182,16 @@ if [ "$KIND" = ship ]; then
 elif [ "$MODE_SET" -eq 1 ]; then
   echo "error: --mode applies only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
   exit 1
+fi
+# POS is read back as <task-id> for every kind, plus <repo-name> for a crewmate
+# and the project list for a secondmate. A surplus crewmate positional is read by
+# nothing, so it is a misspelled flag or a stray word: refuse it here, where it is
+# provably unread, rather than scaffolding a brief that silently omits what it asked for.
+if [ "$KIND" = secondmate ]; then
+  [ "${#POS[@]}" -ge 1 ] || { echo "error: --secondmate needs a <task-id> (see --help)" >&2; exit 1; }
+else
+  [ "${#POS[@]}" -ge 2 ] || { echo "error: a $KIND brief needs <task-id> <repo-name> (see --help)" >&2; exit 1; }
+  [ "${#POS[@]}" -le 2 ] || { echo "error: unexpected extra argument '${POS[2]}'; a $KIND brief takes only <task-id> <repo-name>, and anything beyond them would be read by nothing (see --help)" >&2; exit 1; }
 fi
 ID=${POS[0]}
 
@@ -312,19 +326,23 @@ if [ "$GATES" -eq 1 ]; then
 # injects FM_HOME only for secondmates), and a checker run against the wrong home
 # finds no gates.md and exits 0 - a silent pass. Pin the home on the command itself.
 GATES_CHECK_CMD="FM_HOME=$(shell_quote "$FM_HOME") FM_DATA_OVERRIDE=$(shell_quote "$DATA") FM_STATE_OVERRIDE=$(shell_quote "$STATE") $(shell_quote "$FM_ROOT/bin/fm-gates-check.sh") $(shell_quote "$ID")"
-# One contract, but the line about where an automated gate lands must agree with
-# the delivery path this same brief prescribes below: a scout opens no PR and a
-# local-only ship never pushes one.
-if [ "$KIND" = scout ]; then
-  GATES_TEST_LINE="Record every gate that can be expressed as an automated test in the report as a proposed test, so it can land if the scout is promoted; write no test and open no PR here."
-  GATES_CHECK_TIMING="firstmate runs the checker before accepting your report"
-elif [ "$MODE" = local-only ]; then
-  GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed on your \`fm/$ID\` branch, so it travels with the branch firstmate merges."
-  GATES_CHECK_TIMING="firstmate runs the checker before starting validation"
-else
-  GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so validation and CI run it."
-  GATES_CHECK_TIMING="firstmate runs the checker before starting validation"
-fi
+# Both gate lines name a phase of the delivery path, so each one has to be the
+# path this same brief prescribes below. A scout opens no PR, a local-only ship
+# never pushes one, and only a no-mistakes ship has a validation phase at all.
+case "${KIND}/${MODE}" in
+  scout/*)
+    GATES_TEST_LINE="Record every gate that can be expressed as an automated test in the report as a proposed test, so it can land if the scout is promoted; write no test and open no PR here."
+    GATES_CHECK_TIMING="firstmate runs the checker before accepting your report" ;;
+  ship/local-only)
+    GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed on your \`fm/$ID\` branch, so it travels with the branch firstmate merges."
+    GATES_CHECK_TIMING="firstmate runs the checker before accepting the ready branch" ;;
+  ship/direct-PR)
+    GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so CI runs it there."
+    GATES_CHECK_TIMING="firstmate runs the checker before the merge authority decides on the PR" ;;
+  *)
+    GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so validation and CI run it."
+    GATES_CHECK_TIMING="firstmate runs the checker before starting validation" ;;
+esac
 IFS= read -r -d '' GATES_SECTION <<EOF || true
 # Acceptance gates
 \`$DATA/$ID/gates.md\` is authoritative for this task.
