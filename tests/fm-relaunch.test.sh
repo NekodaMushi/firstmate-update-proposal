@@ -81,6 +81,30 @@ SH
   cat > "$fb/no-mistakes" <<'SH'
 #!/usr/bin/env bash
 set -u
+# FM_FAKE_RUN_COARSE_STATUS drives the coarse rung: `axi status` answers for a
+# DIFFERENT branch, so attribution falls through to the plain runs listing, and
+# that listing carries the status word under test for this worktree's branch.
+if [ -n "${FM_FAKE_RUN_COARSE_STATUS:-}" ]; then
+  branch=$(git symbolic-ref --quiet --short HEAD)
+  short=$(git rev-parse --short HEAD)
+  head=$(git rev-parse HEAD)
+  if [ "${1:-}" = axi ] && [ "${2:-}" = status ]; then
+    cat <<EOF
+run:
+  id: "RUN9"
+  branch: someone-elses-branch
+  status: running
+  head: "$head"
+  pr: ""
+EOF
+    exit 0
+  fi
+  if [ "${1:-}" = runs ]; then
+    printf '%s  %s  %s  2026-08-26\n' "$FM_FAKE_RUN_COARSE_STATUS" "$branch" "$short"
+    exit 0
+  fi
+  exit 0
+fi
 if [ "${1:-}" = axi ] && [ "${2:-}" = status ]; then
   branch=$(git symbolic-ref --quiet --short HEAD)
   head=$(git rev-parse HEAD)
@@ -222,6 +246,7 @@ run_relaunch() {  # <case-dir> <id>
     FM_FAKE_RUN_ACTIVE="${FM_FAKE_RUN_ACTIVE:-0}" \
     FM_FAKE_RUN_PARKED="${FM_FAKE_RUN_PARKED:-0}" \
     FM_FAKE_RUN_CHECKS_PASSED="${FM_FAKE_RUN_CHECKS_PASSED:-0}" \
+    FM_FAKE_RUN_COARSE_STATUS="${FM_FAKE_RUN_COARSE_STATUS:-}" \
     "$RELAUNCH" "$id" 2>&1
 }
 
@@ -378,6 +403,30 @@ test_refuses_while_a_run_is_parked_at_a_gate() {
   pass "fm-relaunch: refuses while a run sits at a gate the outgoing agent may owe an answer"
 }
 
+# The coarse rung reads the plain `no-mistakes runs` listing, whose vocabulary
+# this repo does not own. An unrecognised word there is not evidence a run ended.
+test_refuses_on_an_unrecognized_coarse_run_status() {
+  local dir out rc
+  dir=$(new_case coarse-unknown rr12)
+  out=$(FM_FAKE_RUN_COARSE_STATUS=queued run_relaunch "$dir" rr12); rc=$?
+  expect_code 1 "$rc" "a run-status word the fleet cannot read must never license a relaunch"
+  assert_contains "$out" "active:unrecognized-status:queued" \
+    "the refusal should name the exact word it could not read"
+  [ ! -s "$dir/fake/literal" ] || fail "an unreadable run status must send no lifecycle input"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "an unreadable run status must leave the old agent running"
+  pass "fm-relaunch: an unrecognized coarse run status refuses instead of reading as finished"
+}
+
+test_relaunches_on_a_recognized_finished_coarse_run_status() {
+  local dir out rc
+  dir=$(new_case coarse-completed rr13)
+  out=$(FM_FAKE_RUN_COARSE_STATUS=completed run_relaunch "$dir" rr13); rc=$?
+  expect_code 0 "$rc" "an explicitly recognised finished run owns nothing and must not block"$'\n'"$out"
+  assert_grep 'encode launch-brief' "$dir/fake/literal" \
+    "the coarse rung must still permit a relaunch it can positively read as over"
+  pass "fm-relaunch: a coarse run status in the known-finished vocabulary still allows relaunch"
+}
+
 test_refuses_while_a_no_mistakes_run_owns_the_branch() {
   local dir out rc
   dir=$(new_case run-owner rr3)
@@ -399,5 +448,7 @@ test_relaunches_under_an_exotic_shell_prompt
 test_refuses_an_empty_relaunch_note
 test_refuses_a_secondmate_task
 test_refuses_while_a_no_mistakes_run_owns_the_branch
+test_refuses_on_an_unrecognized_coarse_run_status
+test_relaunches_on_a_recognized_finished_coarse_run_status
 test_refuses_while_a_run_is_parked_at_a_gate
 test_relaunches_once_the_run_reached_a_terminal_outcome

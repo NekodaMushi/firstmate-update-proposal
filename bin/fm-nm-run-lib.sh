@@ -83,14 +83,29 @@ fm_nm_outcome_is_terminal() {  # <outcome>
   return 1
 }
 
+# The ONE inactive vocabulary for the coarse `no-mistakes runs` listing: the
+# status words that mean the run is over. It is deliberately a closed
+# allow-list rather than "anything that is not `running`", because the listing
+# is a human-oriented presentation whose vocabulary this repo does not own -
+# bin/fm-crew-state.sh keeps an explicit unknown arm for the same reason. A word
+# this does not recognise is not evidence that a run ended.
+fm_nm_coarse_status_is_inactive() {  # <status>
+  case "$1" in
+    completed|failed|cancelled) return 0 ;;
+  esac
+  return 1
+}
+
 # Coarse cross-branch attribution over the top-level `no-mistakes runs` listing,
 # used when a bare `axi status` answered for some OTHER branch. The listing is
 # plain human-oriented text, newest first, with columns
 # "<status> <branch> <short-sha> <date> [<pr-url>]" separated by runs of spaces
 # (verified: no quoting, so splitting on the first two whitespace runs is exact).
-# Echoes the first matching row's status word (running/completed/cancelled/
-# failed), or empty when <branch> has no row within <limit> whose code identity
-# also matches <worktree> under fm_nm_head_matches_worktree.
+# Echoes the first matching row's status word verbatim - the four seen today are
+# running/completed/cancelled/failed, but the word is passed through unjudged so
+# the caller's vocabulary decides - or empty when <branch> has no row within
+# <limit> whose code identity also matches <worktree> under
+# fm_nm_head_matches_worktree.
 fm_nm_runs_status_for_branch() {  # <worktree> <timeout_secs> <branch> <limit>
   local wt=$1 timeout_secs=$2 branch=$3 limit=$4 out row st rest br sha
   out=$(fm_nm_run "$wt" "$timeout_secs" runs --limit "$limit")
@@ -132,6 +147,12 @@ fm_nm_runs_status_for_branch() {  # <worktree> <timeout_secs> <branch> <limit>
 # An unanswerable CLI is fail-open (`unanswered`), matching bin/fm-teardown.sh's
 # accepted best-effort residual: making a healthy no-mistakes CLI a prerequisite
 # would block recovery precisely when the toolchain is the thing that is wedged.
+#
+# A run that ANSWERED, in either rung, is read fail-closed: only an explicitly
+# recognised terminal outcome or inactive coarse status reports the run as over.
+# A status or outcome word neither vocabulary knows is reported active, naming
+# the exact unrecognised word, because an unreadable answer from a live CLI is
+# not evidence that the run finished.
 fm_nm_run_active_for_worktree() {  # <worktree> <timeout_secs> <runs-limit>
   local wt=$1 timeout_secs=$2 limit=$3 branch out run_branch outcome status coarse
   command -v no-mistakes >/dev/null 2>&1 || { printf 'no-cli'; return 1; }
@@ -152,9 +173,14 @@ fm_nm_run_active_for_worktree() {  # <worktree> <timeout_secs> <runs-limit>
     return 0
   fi
   coarse=$(fm_nm_runs_status_for_branch "$wt" "$timeout_secs" "$branch" "$limit")
+  [ -n "$coarse" ] || { printf 'no-run'; return 1; }
+  if fm_nm_coarse_status_is_inactive "$coarse"; then
+    printf 'ended:%s' "$coarse"
+    return 1
+  fi
   case "$coarse" in
-    running) printf 'active:running'; return 0 ;;
-    '') printf 'no-run'; return 1 ;;
-    *) printf 'ended:%s' "$coarse"; return 1 ;;
+    running) printf 'active:running' ;;
+    *) printf 'active:unrecognized-status:%s' "$coarse" ;;
   esac
+  return 0
 }

@@ -158,7 +158,17 @@ fm_backend_tmux_current_command() {  # <target>
 # recognises - claude, codex, muse-bin-<version>, a login shell - are fleet
 # facts, not tmux facts. This name stays as the adapter-local spelling every
 # liveness signal below already calls.
+#
+# The owner is reached lazily rather than sourced at load, for the same reason
+# the vocabulary's own dependencies are: a consumer that never classifies a
+# process must not have to carry the whole backend layer. Resolving it here
+# also means this adapter answers identically whether it was reached through
+# fm_backend_source or sourced on its own.
 fm_backend_tmux_classify_process_name() {  # <path> [argv0] -> agent|shell|other
+  if ! command -v fm_backend_classify_process_name >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-backend.sh
+    . "$FM_BACKEND_LIB_DIR/fm-backend.sh" || { printf 'other'; return 1; }
+  fi
   fm_backend_classify_process_name "$@"
 }
 
