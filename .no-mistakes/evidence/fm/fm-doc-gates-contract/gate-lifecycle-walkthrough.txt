@@ -1,0 +1,115 @@
+
+===== 1. INTAKE - firstmate writes data/t1/gates.md by hand (CHECK/EXPECT/EVIDENCE/ABANDON) =====
+# Gates for t1
+- [ ] G1: README greets the reader
+  CHECK: cat README.md
+  EXPECT: hello
+  EVIDENCE: pending
+- [ ] G2: the greeting is localized
+  CHECK: cat README.md
+  EXPECT: bonjour
+  EVIDENCE: pending
+- [ ] G3: feature we gave up on
+  CHECK: echo ran-g3
+  EXPECT: never
+  EVIDENCE: pending
+ABANDON: G3 upstream removed the feature
+
+===== 2. BRIEF - gates.md exists, so the scaffold is invoked with --gates =====
+# Acceptance gates
+`/tmp/gate-walkthrough.JPG241/data/t1/gates.md` is authoritative for this task.
+Read it, but do not edit it.
+Do not create or modify `/tmp/gate-walkthrough.JPG241/data/t1/gates-result.md` yourself; if you run the checker below, the checker alone owns that result-file write.
+Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so validation and CI run it.
+You may run `FM_HOME='/tmp/gate-walkthrough.JPG241' FM_DATA_OVERRIDE='/tmp/gate-walkthrough.JPG241/data' FM_STATE_OVERRIDE='/tmp/gate-walkthrough.JPG241/state' '/home/fabien/.no-mistakes/worktrees/c7c4d0d40ca0/01M0YY20R3SHMNRPB0B5FHXBJP/bin/fm-gates-check.sh' 't1'` to gauge progress, but only firstmate's run counts.
+A `done:` status means only "I believe the gates pass", not "the task is finished"; firstmate runs the checker before starting validation.
+If you believe a gate is impossible, append `blocked: gate <gate-id> impossible - <reason>` to the status file.
+Never abandon a gate silently, and never write an abandonment into `/tmp/gate-walkthrough.JPG241/data/t1/gates.md`.
+
+
+===== 2b. SCOUT BRIEF - same gate file, scout contract (no test, no PR, check at report) =====
+# Acceptance gates
+`/tmp/gate-walkthrough.JPG241/data/s1/gates.md` is authoritative for this task.
+Read it, but do not edit it.
+Do not create or modify `/tmp/gate-walkthrough.JPG241/data/s1/gates-result.md` yourself; if you run the checker below, the checker alone owns that result-file write.
+Record every gate that can be expressed as an automated test in the report as a proposed test, so it can land if the scout is promoted; write no test and open no PR here.
+You may run `FM_HOME='/tmp/gate-walkthrough.JPG241' FM_DATA_OVERRIDE='/tmp/gate-walkthrough.JPG241/data' FM_STATE_OVERRIDE='/tmp/gate-walkthrough.JPG241/state' '/home/fabien/.no-mistakes/worktrees/c7c4d0d40ca0/01M0YY20R3SHMNRPB0B5FHXBJP/bin/fm-gates-check.sh' 's1'` to gauge progress, but only firstmate's run counts.
+A `done:` status means only "I believe the gates pass", not "the task is finished"; firstmate runs the checker before accepting your report.
+If you believe a gate is impossible, append `blocked: gate <gate-id> impossible - <reason>` to the status file.
+Never abandon a gate silently, and never write an abandonment into `/tmp/gate-walkthrough.JPG241/data/s1/gates.md`.
+
+
+===== 3. THE OMISSION THE SCAFFOLD CANNOT DETECT - same task, --gates left off =====
+exit=0  (scaffold accepted the omission)
+acceptance-gate sections in the brief: 0
+
+===== 4. --gates on a task with no gates.md is refused (never calls an absent file authoritative) =====
+error: --gates requires /tmp/gate-walkthrough.JPG241/data/t2/gates.md to exist; firstmate writes it at intake (docs/configuration.md "Task gates"). Write the gate file first, then scaffold the brief.
+exit=1
+
+===== 5. --gates on a secondmate charter is refused =====
+error: --gates applies only to crewmate ship or scout briefs; secondmate charters cannot carry task gates
+exit=1
+
+===== 6. COMPLETION - firstmate runs bin/fm-gates-check.sh t1 =====
+G1: satisfied - output contained EXPECT 'hello' (exit 0)
+G2: unsatisfied - output lacked EXPECT 'bonjour' (exit 0)
+G3: abandoned - not accepted; reason given: upstream removed the feature; pass --accept-abandon G3 to accept
+summary: satisfied=1 unsatisfied=1 abandoned=1 accepted=0 abandon_unknown=0 unparseable=0 parse_errors=0 -> /tmp/gate-walkthrough.JPG241/data/t1/gates-result.md
+exit=1
+
+===== 7. THE COMPLETION ARTIFACT - data/t1/gates-result.md =====
+# Gates result for t1
+copy: /tmp/gate-walkthrough.JPG241/copy
+head: 1e57630c3ec1d9cf9f936f06c1d73d018d75d079
+checked: 2026-08-26T20:23:37Z
+timeout: 120
+
+## G1: satisfied
+reason: output contained EXPECT 'hello' (exit 0)
+output:
+```
+hello
+```
+
+## G2: unsatisfied
+reason: output lacked EXPECT 'bonjour' (exit 0)
+output:
+```
+hello
+```
+
+## G3: abandoned
+reason: not accepted; reason given: upstream removed the feature; pass --accept-abandon G3 to accept
+
+## Summary
+satisfied=1 unsatisfied=1 abandoned=1 accepted=0 abandon_unknown=0 unparseable=0 parse_errors=0 exit=1
+
+===== 8. The checker judges the copy as it stands on disk, uncommitted changes included =====
+ M README.md
+G1: satisfied - output contained EXPECT 'hello' (exit 0)
+G2: satisfied - output contained EXPECT 'bonjour' (exit 0)
+G3: abandoned - accepted via --accept-abandon; reason given: upstream removed the feature
+summary: satisfied=2 unsatisfied=0 abandoned=1 accepted=1 abandon_unknown=0 unparseable=0 parse_errors=0 -> /tmp/gate-walkthrough.JPG241/data/t1/gates-result.md
+exit=0
+copy: /tmp/gate-walkthrough.JPG241/copy
+head: 1e57630c3ec1d9cf9f936f06c1d73d018d75d079
+checked: 2026-08-26T20:23:37Z
+timeout: 120
+head recorded above vs committed HEAD: 1e57630 (unchanged by the uncommitted edit)
+
+===== 9. gates-result.md is the only file the checker writes =====
+gates.md: unchanged by the checker
+copy still holds only the worker edit:  M README.md
+
+===== 10. Archived scout gates under data/t1/archive/scout/ stay inert =====
+G1: satisfied - output contained EXPECT 'hello' (exit 0)
+G2: satisfied - output contained EXPECT 'bonjour' (exit 0)
+G3: abandoned - accepted via --accept-abandon; reason given: upstream removed the feature
+summary: satisfied=2 unsatisfied=0 abandoned=1 accepted=1 abandon_unknown=0 unparseable=0 parse_errors=0 -> /tmp/gate-walkthrough.JPG241/data/t1/gates-result.md
+(no S1 verdict: the checker reads only data/t1/gates.md)
+
+===== 11. A promoted task whose fresh ship gates.md is missing - the silent-pass window AGENTS.md orders closed =====
+no gates for t1 (/tmp/gate-walkthrough.JPG241/data/t1/gates.md absent); nothing to check
+exit=0
+gates-result.md: NOT written (nothing to judge)
