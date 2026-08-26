@@ -291,6 +291,14 @@ Record the resulting mode, `yolo` merge posture, and the one-line reason for any
 
 Treat file or subsystem overlap as a risk signal rather than an automatic reason to wait, and dispatch isolated work immediately with no concurrency cap when each change can be independently implemented and validated and the selected delivery path can reconcile ordinary rebases or conflicts.
 Serialize only for a true semantic dependency, shared mutable external state, incompatible concurrent migration, or another concrete condition that makes independent progress or reconciliation unsafe; same-file editing alone is insufficient, and genuine blockers remain durable.
+For a gated task, firstmate writes `data/<task-id>/gates.md` at intake using the `CHECK`, `EXPECT`, `EVIDENCE`, and `ABANDON` contract owned by `bin/fm-gates-check.sh`; the worker reads this file but never writes it.
+Any gate that can be translated into an executable test lands as a test in the delivery; a scout writes no test and records it in its report as a proposed test instead.
+`data/<task-id>/gates-result.md` is the completion artifact.
+A gate left unsatisfied, never checked, or abandoned without `--accept-abandon` blocks acceptance: the PR is not merged, the task is not recorded done, and a scout's report is not accepted as the Done artifact.
+Only firstmate under its configured authority or the captain may waive such a gate, never the worker; record the gate, why it is invalid, obsolete, or disproportionate, who authorized it, and any replacement check or accepted residual risk, then re-run the checker against the revised contract until the recorded result passes.
+A result passes when it records `exit=0`, and the checker's header owns the exact conditions behind that code.
+The checker verifies the task's copy as it stands on disk, uncommitted changes included, rather than any particular commit.
+At completion, firstmate runs `bin/fm-gates-check.sh <task-id>` itself as the last action before the acceptance decision, on a copy that is clean and matches what is being landed, and judges only that run's own result, because `gates-result.md` carries no run identity and any process with the home can have replaced it, so a result found on disk is never acceptance evidence.
 Write the task-specific brief under section 11 before spawning.
 
 ### Dispatch and supervision handoff
@@ -378,6 +386,9 @@ Before treating the investigation or any visual review as complete, load `captai
 When a scout's deliverable is a visual artifact the captain will iterate on, prefer keeping that scout alive to host its own Lavish loop rather than tearing it down and mediating from firstmate, so the scout keeps its investigation context and the captain iterates in one continuous session.
 When implementation is separately authorized, promote the existing scout through `bin/fm-promote.sh` rather than creating a duplicate task.
 The promoted worker must inventory scratch state, return to a clean default-branch base, carry over only intended fix changes, create the ship branch, and follow the project's selected delivery path while leaving scratch commits and debug edits behind and turning a reproduced bug into the regression test.
+`bin/fm-promote.sh` flips the contract without touching gates, so first archive the scout's `gates.md` and `gates-result.md` together and unedited under `data/<id>/archive/scout/`, deleting neither, then immediately write the fresh ship `gates.md`; promotion is incomplete and the promoted worker is sent no ship instructions until that file exists.
+Promotion carries the worker-facing contract too, so restate in the ship instructions that gates now land as tests in the delivery and that the checker runs at this task's ship phase, superseding the scout section's no-test, no-PR, and check-at-report wording that promotion does not regenerate.
+Carry gates over explicitly: translate each still-applicable scout gate into a ship gate and record the mapping, so a reproduced bug becomes a gate on its regression test being present and passing, and keep unresolved scout uncertainty as an explicit ship gate or a recorded risk rather than losing a negative finding.
 
 ## 8. Supervision protocol
 
@@ -507,6 +518,7 @@ Use its scaffold as the contract, then replace every `{TASK}` placeholder with a
 Keep additions task-specific rather than repeating lifecycle instructions, and alter generated sections only when the task genuinely differs from the standard shape.
 
 Every ship brief must retain the worktree-isolation assertion and stop if launched in the primary checkout.
+For every ship or scout brief, when `data/<task-id>/gates.md` exists, invoke `bin/fm-brief.sh` with `--gates` before spawning; the scaffold cannot detect an omitted flag.
 If a ship task touches firstmate's shared tracked material, explicitly require `firstmate-coding-guidelines` before editing.
 If a task will drive Herdr lifecycle behavior, scaffold with `--herdr-lab`; if that need appears after an unguarded scaffold, stop and regenerate rather than adding commands by hand.
 The generated Herdr contract must use a named non-`default` isolated lab and its guarded helper for every lifecycle action.
