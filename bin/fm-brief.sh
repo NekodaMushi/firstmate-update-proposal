@@ -59,8 +59,10 @@
 # Every flag but --mode is a bare boolean: a `--flag=value` spelling, a single-dash
 # spelling, and any unrecognised option are refused rather than filed as a
 # positional, and a crewmate brief refuses a third positional the scaffold would
-# never read. So a misspelled --gates or --herdr-lab, whatever the spelling, can
-# never be dropped behind a success message.
+# never read. So a misspelled --gates or --herdr-lab is refused rather than dropped
+# behind a success message, for any spelling that keeps a leading dash or lands
+# beyond <task-id> <repo-name>. A dash-less `gates` in the repo-name slot is the
+# one spelling that cannot be caught, since a repo name is an arbitrary word.
 # There is no --yolo flag here. The worker never owns merge decisions, so yolo is
 # a spawn-time and firstmate-side input only (AGENTS.md section 7).
 # Every scaffold's status protocol distinguishes the configured
@@ -339,9 +341,12 @@ case "${KIND}/${MODE}" in
   ship/direct-PR)
     GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so CI runs it there."
     GATES_CHECK_TIMING="firstmate runs the checker before the merge authority decides on the PR" ;;
-  *)
+  ship/no-mistakes)
     GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so validation and CI run it."
     GATES_CHECK_TIMING="firstmate runs the checker before starting validation" ;;
+  *)
+    echo "error: internal: no acceptance-gates wording for ${KIND}/${MODE}; every mode --mode accepts must name the phase its brief actually has" >&2
+    exit 1 ;;
 esac
 IFS= read -r -d '' GATES_SECTION <<EOF || true
 # Acceptance gates

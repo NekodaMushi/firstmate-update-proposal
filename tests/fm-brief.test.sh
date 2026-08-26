@@ -350,6 +350,37 @@ test_gates_landing_instruction_matches_delivery_contract() {
   pass "fm-brief.sh: the gates landing instruction follows the brief's own delivery path"
 }
 
+# The gates wording and the closed set --mode validates are two lists in one
+# script, and nothing tied them together: a fourth mode would have silently
+# inherited the no-mistakes phrasing. Read the accepted set from the script's own
+# refusal so the list under test is the executable's, not a copy, and require each
+# accepted mode to produce gates wording its own delivery contract can support.
+test_every_accepted_mode_has_gates_wording_for_its_own_phase() {
+  local home modes mode brief out
+  home="$TMP_ROOT/gates-mode-coverage-home"
+  mkdir -p "$home/data" "$home/state"
+
+  out=$(run_brief "$home" mode-probe fixture-repo --mode not-a-mode 2>&1) || true
+  modes=$(printf '%s\n' "$out" | sed -n 's/.*must be one of \([^(]*\) (got.*/\1/p' | tr -d ' ' | tr ',' ' ')
+  [ -n "$modes" ] || fail "could not read the accepted mode set from fm-brief.sh's own refusal ($out)"
+
+  for mode in $modes; do
+    seed_gates "$home" "mode-$mode"
+    run_brief "$home" "mode-$mode" fixture-repo --gates --mode "$mode" >/dev/null 2>&1 \
+      || fail "--gates refused the accepted mode $mode, so it has no acceptance-gates wording"
+    brief="$home/data/mode-$mode/brief.md"
+    assert_grep "firstmate runs the checker before" "$brief" \
+      "the $mode gates section did not say when firstmate's decisive run happens"
+    if grep -q "no remote, no PR, no pipeline" "$brief" || grep -q "Do NOT run /no-mistakes" "$brief"; then
+      assert_no_grep "before starting validation" "$brief" \
+        "the $mode gates section named a validation phase the same brief forbids"
+      assert_no_grep "so validation and CI run it" "$brief" \
+        "the $mode gates section sent its test to a validation phase the same brief forbids"
+    fi
+  done
+  pass "fm-brief.sh: every mode --mode accepts has gates wording its own delivery contract supports"
+}
+
 # Crewmate panes do not inherit firstmate's home environment (bin/fm-spawn.sh
 # injects FM_HOME only for secondmates), and fm-gates-check.sh exits 0 with
 # "no gates" when it resolves a home that has no gates.md - a silent pass the
@@ -1042,6 +1073,7 @@ test_help_includes_entire_header
 test_no_gates_output_is_byte_identical_to_baseline
 test_gates_contract_and_kind_compatibility
 test_gates_landing_instruction_matches_delivery_contract
+test_every_accepted_mode_has_gates_wording_for_its_own_phase
 test_emitted_gates_check_command_pins_the_home
 test_boolean_flags_reject_a_value_instead_of_dropping_it
 test_gates_requires_the_gate_file_to_exist
