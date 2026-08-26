@@ -13,8 +13,9 @@ metadata:
 
 Use this playbook when the session-start digest reports an ordinary direct report's endpoint dead or its metadata has no window, or when a direct report is stale, looping, repeatedly confused, asking a question its brief already answers, unresponsive, or when a steer failed to land.
 
-Interrupt, stop, and relaunch a worker through `bin/fm-control.sh <task-id> interrupt|exit|relaunch`, which resolves the recorded runtime itself, verifies each action, and never tears down or discards anything ([`docs/agent-control.md`](../../../docs/agent-control.md)).
-That plane covers workers running in this home; a remotely placed secondmate is refused by name and reconciled through `secondmate-provisioning` instead.
+Interrupt and stop a worker through `bin/fm-control.sh <task-id> interrupt|exit`, and replace it in the same local copy through `bin/fm-relaunch.sh <task-id>` after writing its required recovery note.
+The control plane resolves the recorded runtime itself, verifies each action, and never tears down or discards anything ([`docs/agent-control.md`](../../../docs/agent-control.md)).
+`bin/fm-relaunch.sh` covers ship and scout workers only, because only their instructions are rewritten to carry the note pointer; every secondmate is refused by name and reconciled through `secondmate-provisioning` instead.
 Load `harness-adapters` before a resume command or a harness-specific skill invocation, and whenever the adapter's own quirks matter.
 The target window's harness is recorded as `harness=` in `state/<id>.meta`.
 
@@ -35,7 +36,8 @@ Use `treehouse status` for treehouse-backed tmux, herdr, zellij, or cmux tasks, 
 Do not sweep another home's endpoints or infer ownership from a matching window label.
 
 Before relaunch, prove that no live agent still owns the recorded task and that the existing worktree remains available.
-Preserve its uncommitted changes and commits, keep the same task identity, and resume or relaunch the recorded harness in that existing worktree with the same brief plus a concise progress note.
+Write a non-empty `data/<task-id>/relaunch-note.md` with the branch, unpushed commits, PR if any, active validation run and step, and decisions already made for pending gates.
+Preserve its uncommitted changes and commits, keep the same task identity, and invoke `bin/fm-relaunch.sh <task-id>` so the recorded harness restarts in that existing worktree with the original instructions plus the required note pointer.
 Do not use a fresh generic spawn while the recorded worktree is unaccounted for, because allocating another worktree can split one task across two copies.
 If the worktree or ownership cannot be reconciled safely, leave all state intact and report the task failed or blocked with the conflicting evidence.
 
@@ -46,8 +48,9 @@ Escalate in order:
 1. Peek the pane.
 2. If the crewmate is waiting on a question its brief already answers, answer in one line via `FM_HOME=<this-firstmate-home> bin/fm-send.sh` from an active firstmate session unless `FM_HOME` is already set to the active firstmate home.
 3. If the crewmate is confused or looping, interrupt with `FM_HOME=<this-firstmate-home> bin/fm-control.sh <task-id> interrupt`, then redirect with one corrective line through `fm-send`.
-4. If the crewmate is genuinely wedged after redirection, relaunch it with `FM_HOME=<this-firstmate-home> bin/fm-control.sh <task-id> relaunch --note '<progress so far>'`, which stops the agent, carries the brief plus that note into a replacement in the same local copy, and restores the prior record if the replacement cannot start.
-   Pass `--harness`, `--model`, or `--effort` on that same command when the worker should come back on a different runtime.
+4. If the crewmate is genuinely wedged after redirection, write `data/<task-id>/relaunch-note.md`, then run `FM_HOME=<this-firstmate-home> bin/fm-relaunch.sh <task-id>` to stop the agent and carry the original instructions plus that note pointer into a replacement in the same local copy.
+   The command refuses while an active validation response may own the branch, and its header owns the abort-and-custody sequence for that case.
+   Use `FM_HOME=<this-firstmate-home> bin/fm-control.sh <task-id> relaunch --note '<progress so far>' --harness <adapter>` instead, adding `--model` or `--effort`, when the worker should come back on a different runtime.
    Genuine wedging means looping, unresponsive, repeating the same obstacle, or truly dead.
    A low context reading is not wedging; modern harnesses auto-compact and keep going.
    The worktree and commits persist, so relaunch is cheap.

@@ -4401,6 +4401,104 @@ test_wait_transition_clean_timeout_returns_1() {
 # shellcheck source=bin/fm-backend.sh
 . "$ROOT/bin/fm-backend.sh"
 
+# --- shell_ready: the relaunch handoff's bare-shell proof -------------------
+# fm_backend_shell_ready runs AFTER the old agent has been stopped, so a false
+# `ready` launches a second agent onto a live worktree. These drive the herdr
+# adapter's half directly with canned process-info and a scripted process table.
+
+shell_ready_lab() {  # <dir> <shell-pid> <tree-rows-file>
+  local dir=$1 pid=$2 rows=$3
+  mkdir -p "$dir"
+  cat > "$dir/ps" <<SH
+#!/usr/bin/env bash
+case "\$*" in
+  *"-axo pid=,ppid=,args="*) cat '$rows' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$dir/ps"
+}
+
+run_shell_ready() {  # <dir> <resp> <log> <ps>
+  PATH="$(make_herdr_fakebin "$1"):$PATH" FM_HERDR_LOG="$3" FM_HERDR_RESPONSES="$2" \
+    FM_HERDR_PS_BIN="$4" \
+    bash -c '. "$0/bin/fm-backend.sh"; fm_backend_shell_ready herdr fmtest:w2:p2' \
+    "$ROOT" 2>&1
+}
+
+shell_ready_case() {  # <name> <shell-pid> -> echoes dir
+  local dir="$TMP_ROOT/$1"
+  mkdir -p "$dir/responses"
+  : > "$dir/log"
+  printf '%s\n' '1 0 /sbin/init' > "$dir/rows"
+  printf '%s 1 /bin/zsh\n' "$2" >> "$dir/rows"
+  printf '%s\n' "$dir"
+}
+
+test_shell_ready_accepts_the_treehouse_subshell_chain() {
+  local dir out rc
+  dir=$(shell_ready_case sr-chain 700)
+  printf '701 700 -zsh\n' >> "$dir/rows"
+  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w2:p2","shell_pid":700,"foreground_process_group_id":701,"foreground_processes":[{"pid":701,"name":"zsh","argv0":"-zsh"}]}}}\n' > "$dir/responses/1.out"
+  shell_ready_lab "$dir" 700 "$dir/rows"
+  out=$(run_shell_ready "$dir" "$dir/responses" "$dir/log" "$dir/ps"); rc=$?
+  [ "$rc" -eq 0 ] || fail "a pane sitting in its treehouse subshell is a bare shell: rc=$rc out=$out"
+  assert_contains "$out" "foreground-shell-no-agent" "the proof should name both halves it verified"
+  pass "herdr shell_ready: the pane shell plus its treehouse subshell is a bare shell"
+}
+
+test_shell_ready_refuses_an_agent_backgrounded_behind_a_shell() {
+  local dir out rc
+  dir=$(shell_ready_case sr-background 710)
+  printf '711 710 -zsh\n' >> "$dir/rows"
+  printf '712 711 /home/fake/.local/bin/claude --resume\n' >> "$dir/rows"
+  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w2:p2","shell_pid":710,"foreground_process_group_id":711,"foreground_processes":[{"pid":711,"name":"zsh","argv0":"-zsh"}]}}}\n' > "$dir/responses/1.out"
+  shell_ready_lab "$dir" 710 "$dir/rows"
+  out=$(run_shell_ready "$dir" "$dir/responses" "$dir/log" "$dir/ps"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a live harness behind the foreground shell must refuse: out=$out"
+  assert_contains "$out" "agent-in-pane-tree" \
+    "the refusal must name the harness in the tree, not the foreground"
+  pass "herdr shell_ready: a harness backgrounded behind a foreground shell refuses"
+}
+
+test_shell_ready_refuses_an_unnamed_foreground_process() {
+  local dir out rc
+  dir=$(shell_ready_case sr-unnamed 720)
+  printf '721 720 -zsh\n' >> "$dir/rows"
+  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w2:p2","shell_pid":720,"foreground_process_group_id":721,"foreground_processes":[{"pid":721,"name":"zsh","argv0":"-zsh"},{"pid":99}]}}}\n' > "$dir/responses/1.out"
+  shell_ready_lab "$dir" 720 "$dir/rows"
+  out=$(run_shell_ready "$dir" "$dir/responses" "$dir/log" "$dir/ps"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a foreground process with no name must refuse, not be skipped: out=$out"
+  assert_contains "$out" "foreground-process-unnamed" \
+    "an unidentifiable foreground process must refuse by name"
+  pass "herdr shell_ready: a foreground process it cannot name is a refusal, never an omission"
+}
+
+test_shell_ready_refuses_an_unreadable_process_tree() {
+  local dir out rc
+  dir=$(shell_ready_case sr-notree 730)
+  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w2:p2","shell_pid":730,"foreground_process_group_id":731,"foreground_processes":[{"pid":731,"name":"zsh","argv0":"-zsh"}]}}}\n' > "$dir/responses/1.out"
+  : > "$dir/rows"
+  shell_ready_lab "$dir" 730 "$dir/rows"
+  out=$(run_shell_ready "$dir" "$dir/responses" "$dir/log" "$dir/ps"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a process table that cannot be read must refuse: out=$out"
+  assert_contains "$out" "process-tree-unreadable" "an unreadable tree must refuse by name"
+  pass "herdr shell_ready: an unreadable process tree refuses instead of reporting agent-free"
+}
+
+test_shell_ready_refuses_a_program_holding_the_foreground() {
+  local dir out rc
+  dir=$(shell_ready_case sr-program 740)
+  printf '741 740 vim\n' >> "$dir/rows"
+  printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w2:p2","shell_pid":740,"foreground_process_group_id":741,"foreground_processes":[{"pid":741,"name":"vim","argv0":"vim"}]}}}\n' > "$dir/responses/1.out"
+  shell_ready_lab "$dir" 740 "$dir/rows"
+  out=$(run_shell_ready "$dir" "$dir/responses" "$dir/log" "$dir/ps"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a program holding the pane must refuse: out=$out"
+  assert_contains "$out" "foreground-not-shell" "the refusal should name the busy foreground"
+  pass "herdr shell_ready: a program holding the pane's foreground is not a bare shell"
+}
+
+
 test_version_check_accepts_current_protocol
 test_version_check_refuses_old_protocol
 test_version_check_refuses_missing_herdr
@@ -4581,3 +4679,8 @@ test_wait_transition_stream_absorb_clears_then_timeout
 test_wait_transition_reader_failure_returns_2
 test_wait_transition_bad_ack_returns_2_and_cleans_up
 test_wait_transition_clean_timeout_returns_1
+test_shell_ready_accepts_the_treehouse_subshell_chain
+test_shell_ready_refuses_an_agent_backgrounded_behind_a_shell
+test_shell_ready_refuses_an_unnamed_foreground_process
+test_shell_ready_refuses_an_unreadable_process_tree
+test_shell_ready_refuses_a_program_holding_the_foreground

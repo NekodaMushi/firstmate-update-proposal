@@ -895,6 +895,176 @@ fm_backend_agent_state() {  # <backend> <target>
   esac
 }
 
+# The process-name vocabulary below needs the harness path rule and the Cursor
+# structural rule. They are sourced on first use rather than at load time, the
+# same way an adapter is, so every consumer of this file that never classifies a
+# process pays nothing for them.
+_fm_backend_process_vocabulary_ready() {
+  [ -z "${_FM_BACKEND_PROCESS_VOCABULARY_SOURCED:-}" ] || return 0
+  # shellcheck source=bin/fm-session-lock-lib.sh
+  . "$FM_BACKEND_LIB_DIR/fm-session-lock-lib.sh" || return 1
+  # shellcheck source=bin/fm-cursor-lib.sh
+  . "$FM_BACKEND_LIB_DIR/fm-cursor-lib.sh" || return 1
+  _FM_BACKEND_PROCESS_VOCABULARY_SOURCED=1
+}
+
+# fm_backend_classify_process_name: the single owner of the process-name
+# vocabulary shared by every liveness signal in this layer - `agent` for a
+# verified harness, `shell` for an idle login/interactive shell, `other` for
+# anything else. Keeping one classifier means no two name sources, and no two
+# backends, can drift into disagreeing about what a given name means.
+# The names it recognises are fleet facts rather than any one backend's, so it
+# lives here; bin/backends/tmux.sh keeps its own spelling as a delegate.
+fm_backend_classify_process_name() {  # <path> [argv0] -> agent|shell|other
+  _fm_backend_process_vocabulary_ready || { printf 'other'; return 1; }
+  local path=$1 argv0=${2:-} base
+  base=${path##*/}
+  base=${base#-}
+  case "$base" in
+    # muse is anchored rather than globbed like its neighbours: its installed
+    # binary is muse-bin-<version> (the launcher execs it, so the version is the
+    # live process name and changes on every auto-update), and unlike `claude` or
+    # `codex` the substring `muse` is a common English fragment - a *muse* glob
+    # would classify musescore or amuse as a live agent pane. The install path
+    # cannot carry it either: ~/.local/bin/muse-bin-<version> has no `muse` path
+    # COMPONENT, so the fm_harness_path_name fallback below never fires for it.
+    muse|muse-bin-*) printf 'agent' ;;
+    *claude*|*codex*|*opencode*|*grok*|*kimi*|pi|pi-signed|pi-launcher|Pi) printf 'agent' ;;
+    zsh|bash|sh|dash|ash|ksh|mksh|tcsh|csh|fish) printf 'shell' ;;
+    *)
+      if fm_harness_path_name "$path" >/dev/null || fm_harness_path_name "$argv0" >/dev/null; then
+        printf 'agent'
+      # cursor-agent runs as a bundled node script, so tmux reports the pane
+      # command as a bare `node` that no name pattern above can own, and its
+      # other installed name is the far-too-generic `agent` (verified live on
+      # cursor-agent 2026.08.11-e8db854: #{pane_current_command} is `node` while
+      # `ps -o comm=` carries the cursor-agent install path). Identity therefore
+      # comes from the narrowed structural rule in bin/fm-cursor-lib.sh, which
+      # demands Cursor's own name or install tree in the path or argv[0]. An
+      # unrelated `node` or `agent` matches nothing here and stays `other`,
+      # which the callers above fold into `ambiguous` rather than `dead`, so a
+      # stranger's node pane is never reported as an agent-free pane.
+      elif fm_cursor_process_matches "${path:-$argv0}" '' "$argv0"; then
+        printf 'agent'
+      else
+        printf 'other'
+      fi
+      ;;
+  esac
+}
+
+# fm_backend_pid_tree_agent_free: 0 when NO process in the subtree rooted at
+# <root-pid> is a verified harness. The scan is the whole tree - every
+# descendant at every depth, background and foreground alike - because the one
+# state this must catch is a harness the foreground classifiers cannot see: a
+# task pane's foreground is its `treehouse get` subshell, and an agent left
+# running behind it is invisible to every pane-level read.
+#
+# Identity, never count. A task pane is several shells deep by construction, so
+# "how many processes" says nothing; "is any of them a harness" is the question.
+# argv[0] is read from `args` rather than `comm` because Linux truncates comm to
+# 15 characters, which would silently shorten exactly the version-suffixed
+# harness names the vocabulary identifies (muse-bin-<version>), and only the
+# FIRST token is taken, so a harness name appearing as an ARGUMENT (`git commit
+# -m 'claude review'`) is never mistaken for a running harness.
+#
+# A tree that cannot be read is never reported as agent-free: an absent ps, an
+# unreadable process table, a table that does not contain <root-pid>, and a
+# process-name vocabulary that will not load all refuse. The vocabulary is
+# loaded once up front rather than per process, because a classifier that
+# cannot answer must refuse the whole tree - a classification this scan could
+# not make is exactly the case a fall-through would silently read as agent-free.
+# Prints a reason token on refusal and `pid-tree-agent-free` on success.
+fm_backend_pid_tree_agent_free() {  # <root-pid>
+  local root=$1 ps_bin rows argv0s argv0 class
+  case "$root" in
+    ''|*[!0-9]*) printf 'no-root-pid'; return 1 ;;
+  esac
+  ps_bin=${FM_BACKEND_PS_BIN:-ps}
+  command -v "$ps_bin" >/dev/null 2>&1 || { printf 'no-ps'; return 1; }
+  rows=$(LC_ALL=C "$ps_bin" -axo pid=,ppid=,args= 2>/dev/null) \
+    || { printf 'process-tree-unreadable'; return 1; }
+  [ -n "$rows" ] || { printf 'process-tree-unreadable'; return 1; }
+  argv0s=$(printf '%s\n' "$rows" | LC_ALL=C awk -v root="$root" '
+    {
+      n++
+      pids[n] = $1
+      parents[n] = $2
+      argv0s[n] = $3
+      if ($1 == root) seen = 1
+    }
+    END {
+      if (!seen) exit 1
+      inTree[root] = 1
+      changed = 1
+      while (changed) {
+        changed = 0
+        for (i = 1; i <= n; i++) {
+          if (!inTree[pids[i]] && inTree[parents[i]]) {
+            inTree[pids[i]] = 1
+            changed = 1
+          }
+        }
+      }
+      for (i = 1; i <= n; i++) {
+        if (inTree[pids[i]] && pids[i] != root && argv0s[i] != "") print argv0s[i]
+      }
+    }
+  ') || { printf 'process-tree-unreadable'; return 1; }
+  _fm_backend_process_vocabulary_ready \
+    || { printf 'process-vocabulary-unreadable'; return 1; }
+  while IFS= read -r argv0; do
+    [ -n "$argv0" ] || continue
+    class=$(fm_backend_classify_process_name "$argv0" "$argv0") \
+      || { printf 'process-vocabulary-unreadable'; return 1; }
+    if [ "$class" = agent ]; then
+      printf 'agent-in-pane-tree'
+      return 1
+    fi
+  done <<EOF
+$argv0s
+EOF
+  printf 'pid-tree-agent-free'
+}
+
+# fm_backend_shell_ready: 0 when <target>'s endpoint positively proves it is
+# back at a shell with no live agent process left behind it. This is the launch
+# precondition for replacing an agent in a recorded endpoint: the recovery-grade
+# classifier above answers "is an agent in the FOREGROUND", which a backgrounded
+# harness can still satisfy, so the replacement launch asks separately.
+#
+# The proof is by process IDENTITY, never by process COUNT. A task pane is
+# normally several shells deep by construction - fm-spawn.sh runs `treehouse
+# get` in every non-secondmate pane and the rest of the task lives inside that
+# foreground subshell - so "the pane's shell has no child" describes a topology
+# that never occurs here, while "nothing under this pane is a verified harness"
+# is the question that actually separates a stopped agent from a running one.
+# The endpoint is ready when its foreground process is a recognized shell and no
+# process ANYWHERE in the pane's process tree - background and foreground alike
+# - classifies as an agent; it is refused when a live agent is present or the
+# process view cannot be read at all. A backgrounded harness is the whole reason
+# this asks separately, so a foreground-only answer is never sufficient.
+#
+# Each adapter confirms for itself that the recorded endpoint is the one it is
+# describing before trusting any process field, so this contract carries no
+# caller-side ordering precondition.
+#
+# Prints a proof or reason token either way. Each adapter answers in its own
+# verified vocabulary - tmux from the process table under `#{pane_pid}`, Herdr
+# from its pane process-info API and agent registry - so neither borrows the
+# other's process model. Only the two state-verified backends can answer at all;
+# every other backend has no process view of its endpoint and prints
+# `unverified`.
+fm_backend_shell_ready() {  # <backend> <target>
+  local backend=$1 target=$2
+  fm_backend_source "$backend" || { printf 'unverified'; return 1; }
+  case "$backend" in
+    tmux) fm_backend_tmux_shell_ready "$target" ;;
+    herdr) fm_backend_herdr_shell_ready "$target" ;;
+    *) printf 'unverified'; return 1 ;;
+  esac
+}
+
 # Backward-compatible three-state view for existing callers. An
 # authoritatively missing endpoint is confidently not a live agent, while every
 # ambiguous, unreadable, or unverified result stays unknown.

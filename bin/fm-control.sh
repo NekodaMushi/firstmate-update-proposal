@@ -10,15 +10,17 @@
 #
 # Why this exists, and how it differs from fm-send.sh. bin/fm-send.sh is the
 # DATA plane: conversational text for the agent to read, always routing-marked
-# for a kind=secondmate target so the reply returns through the status path.
-# That marking is right for a message and wrong for a lifecycle command - a
-# marked "/quit" arrives as ordinary chat the agent reasons ABOUT instead of
+# for a kind=secondmate task selector so the reply returns through the status
+# path. That marking is right for a message and wrong for a lifecycle command -
+# a marked "/quit" arrives as ordinary chat the agent reasons ABOUT instead of
 # executing. This script is the control plane: semantic process control with a
 # closed verb list, per-harness mechanics owned by an executable adapter
 # (bin/fm-control-lib.sh) rather than improvised in agent prose, and a verified
-# postcondition for every action. There is deliberately NO arbitrary-text and
-# NO generic raw-key entry point here; fm-send remains the only way to send an
-# agent something to read.
+# postcondition for every action. The exit verb uses fm-send's verified submit
+# transport against the exact recorded endpoint rather than a task selector, so
+# the lifecycle command remains unmarked while submission has one owner. There
+# is deliberately NO arbitrary-text and NO generic raw-key entry point here;
+# fm-send remains the only way to send an agent something to read.
 #
 #   interrupt  Deliver the harness's verified interrupt sequence. The agent
 #              keeps running. Postcondition: delivery succeeded, the endpoint
@@ -130,6 +132,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh
 . "$SCRIPT_DIR/fm-control-lib.sh"
+# shellcheck source=bin/fm-composer-lib.sh
+. "$SCRIPT_DIR/fm-composer-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
@@ -330,6 +334,48 @@ wait_agent_state() {  # <timeout> <wanted>...
   return 1
 }
 
+# rendered_prompt_hint: a DIAGNOSTIC note about what the endpoint is drawing,
+# recorded in the relaunch journal beside the process proof. It is never a
+# rejector: what a ready shell looks like is whatever the operator's PS1 draws,
+# so an unrecognised last row means "nothing to add", not "not ready".
+rendered_prompt_hint() {
+  local screen last
+  screen=$(fm_backend_capture "$BACKEND" "$T" "$FM_COMPOSER_CAPTURE_LINES" "$LABEL" 2>/dev/null || true)
+  last=$(printf '%s\n' "$screen" | fm_composer_strip_ansi | tr -d '\r' |
+    awk 'NF { line=$0 } END { print line }')
+  if fm_composer_row_is_shell_prompt "$last"; then
+    printf 'shell-prompt'
+  else
+    printf 'unrecognized'
+  fi
+}
+
+# wait_bare_shell proves both halves of the relaunch handoff, entirely from
+# process state read through the recorded backend: the recovery-grade classifier
+# sees no agent in the endpoint's foreground, and the endpoint separately proves
+# that its foreground is a shell and that nothing it owns is a live agent.
+# Nothing here reads the rendered screen, because a shell prompt is whatever PS1
+# draws and no glyph vocabulary can decide readiness for every operator.
+# Prints the proof token on success and the blocking state on timeout.
+wait_bare_shell() {  # <timeout>
+  local timeout=$1 state proof elapsed=0
+  while :; do
+    state=$(agent_state)
+    if [ "$state" = dead ]; then
+      proof=$(fm_backend_shell_ready "$BACKEND" "$T") && {
+        printf '%s' "$proof"
+        return 0
+      }
+      state="dead-but-$proof"
+    fi
+    awk -v e="$elapsed" -v t="$timeout" 'BEGIN{exit !(e < t)}' || break
+    sleep "$POLL"
+    elapsed=$(awk -v e="$elapsed" -v p="$POLL" 'BEGIN{printf "%.3f", e + p}')
+  done
+  printf '%s' "$state"
+  return 1
+}
+
 require_state_verified_backend() {  # <verb>
   fm_control_backend_state_verified "$BACKEND" && return 0
   die "task $ID runs on the $BACKEND backend, which has no recovery-grade agent-state classifier, so '$1' cannot prove the agent actually stopped; refusing rather than reporting an unproven transition as done"
@@ -402,26 +448,26 @@ deliver_interrupt() {
 }
 
 verify_interrupt_running() {
-  local proof after
+  local interrupt_proof after
   fm_backend_target_exists "$BACKEND" "$T" "$LABEL" \
     || die "task $ID's endpoint disappeared while interrupting it; no further control action is safe"
-  proof=endpoint
+  interrupt_proof=endpoint
   if fm_control_backend_state_verified "$BACKEND"; then
     # An interrupt cancels a turn; it must never have stopped the agent. This
     # is the postcondition that separates a landed interrupt from an accident.
     after=$(agent_state)
     [ "$after" = alive ] \
       || die "task $ID's agent is '$after' after its interrupt key; an interrupt must leave the agent running"
-    proof=agent-alive
+    interrupt_proof='agent-alive'
   fi
-  printf '%s' "$proof"
+  printf '%s' "$interrupt_proof"
 }
 
 do_interrupt() {
-  local proof cancel
+  local interrupt_proof cancel
   cancel=$(deliver_interrupt) || return $?
-  proof=$(verify_interrupt_running) || return $?
-  printf '%s cancel=%s' "$proof" "$cancel"
+  interrupt_proof=$(verify_interrupt_running) || return $?
+  printf '%s cancel=%s' "$interrupt_proof" "$cancel"
 }
 
 retire_busy_incarnation() {
@@ -433,7 +479,7 @@ retire_busy_incarnation() {
 # do_exit: stop the running agent, preserving endpoint and worktree. Prints
 # `already-stopped` or `stopped`.
 do_exit() {
-  local state cmd verdict cancel interrupt_result=not-needed
+  local state cmd send_output send_rc cancel interrupt_result=not-needed
   require_state_verified_backend exit
   state=$(agent_state)
   case "$state" in
@@ -463,18 +509,36 @@ do_exit() {
       ;;
   esac
   cmd=$(fm_control_exit_command "$HARNESS")
-  # The submit verdict is NOT the postcondition here: a successful exit command
-  # destroys the composer the verdict is read from, so a post-exit read can
-  # legitimately report anything. Only a hard transport failure aborts; the
-  # authoritative proof is the agent-state wait below. The retried Enter still
-  # matters, because a slash command opens a completion popup on some TUIs that
-  # swallows the first Enter.
-  verdict=$(fm_backend_send_text_submit "$BACKEND" "$T" "$cmd" "$EXIT_RETRIES" "$POLL" 1.2 "$LABEL") \
-    || die "the exit command could not be sent to task $ID on $BACKEND"
-  [ "$verdict" != send-failed ] \
-    || die "the exit command could not be sent to task $ID on $BACKEND"
+  # fm-send owns verified text submission, including the retried Enter needed
+  # when a slash-command popup swallows the first one. Addressing the exact
+  # recorded endpoint, rather than the task selector, deliberately avoids the
+  # secondmate conversational marker. Submission is not the postcondition.
+  send_rc=0
+  send_output=$(FM_SEND_RETRIES="$EXIT_RETRIES" FM_SEND_SLEEP="$POLL" FM_SEND_SETTLE=0 \
+    "$SCRIPT_DIR/fm-send.sh" "$T" "$cmd" 2>&1) || send_rc=$?
+  # No send verdict is decisive here, in either direction. A successful exit
+  # destroys the composer fm-send reads its verdict from, so the composer reads
+  # back as a bare shell prompt or as nothing legible at all, which fm-send
+  # correctly reports as an unconfirmed submit (exit 3 or 4) rather than as
+  # delivery. A single instantaneous agent-state probe cannot separate that from
+  # a real transport failure either, because the exiting process has not
+  # necessarily been reaped yet. So EVERY send result falls through to the same
+  # bounded postcondition below, and only a PROVEN send failure - the one
+  # outcome fm-send reports as nothing delivered - is reported as a transport
+  # failure once that bounded proof has also failed. An unconfirmed submit typed
+  # the command into the endpoint, so the unproven fact there is the stop, not
+  # the send.
   state=$(wait_agent_state "$EXIT_WAIT" dead) || {
-    die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
+    case "$send_rc" in
+      0|3|4)
+        [ "$send_rc" = 0 ] || [ -z "$send_output" ] || printf '%s\n' "$send_output" >&2
+        die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
+        ;;
+      *)
+        [ -z "$send_output" ] || printf '%s\n' "$send_output" >&2
+        die "the exit command could not be sent to task $ID on $BACKEND (agent-state=$state after ${EXIT_WAIT}s)"
+        ;;
+    esac
   }
   # The incarnation is over: retire its busy wiring so no stale record or
   # orphaned generation survives the agent that produced it.
@@ -805,7 +869,11 @@ do_relaunch() {
 
   journal_write stopping "${CHECKPOINT_LINES[@]}" "$note_line"
   exit_result=$(do_exit)
-  journal_write exited "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result"
+  state=$(wait_bare_shell "$EXIT_WAIT") || {
+    die "task $ID's old agent stopped, but its endpoint did not become a verifiable bare shell within ${EXIT_WAIT}s (state: $state); refusing to launch a replacement"
+  }
+  journal_write exited "${CHECKPOINT_LINES[@]}" "$note_line" "exit_result=$exit_result" \
+    "shell_ready=$state" "rendered=$(rendered_prompt_hint)"
 
   # The launch owner (fm-spawn --relaunch) clears the previous incarnation's
   # per-task harness wiring before arming the new one, so nothing to do here.

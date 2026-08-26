@@ -152,46 +152,24 @@ fm_backend_tmux_current_command() {  # <target>
   tmux display-message -p -t "$1" '#{pane_current_command}' 2>/dev/null
 }
 
-# fm_backend_tmux_classify_process_name: the single owner of the process-name
-# vocabulary shared by every liveness signal below - `agent` for a verified
-# harness, `shell` for an idle login/interactive shell, `other` for anything
-# else. Keeping one classifier means the two independent name sources can never
-# drift into disagreeing about what a given name means.
+# The process-name vocabulary this adapter classifies with is owned one layer
+# up, in bin/fm-backend.sh: two backends now read process identity (tmux from
+# the process table, Herdr from its pane process-info API), and the names it
+# recognises - claude, codex, muse-bin-<version>, a login shell - are fleet
+# facts, not tmux facts. This name stays as the adapter-local spelling every
+# liveness signal below already calls.
+#
+# The owner is reached lazily rather than sourced at load, for the same reason
+# the vocabulary's own dependencies are: a consumer that never classifies a
+# process must not have to carry the whole backend layer. Resolving it here
+# also means this adapter answers identically whether it was reached through
+# fm_backend_source or sourced on its own.
 fm_backend_tmux_classify_process_name() {  # <path> [argv0] -> agent|shell|other
-  local path=$1 argv0=${2:-} base
-  base=${path##*/}
-  base=${base#-}
-  case "$base" in
-    # muse is anchored rather than globbed like its neighbours: its installed
-    # binary is muse-bin-<version> (the launcher execs it, so the version is the
-    # live process name and changes on every auto-update), and unlike `claude` or
-    # `codex` the substring `muse` is a common English fragment - a *muse* glob
-    # would classify musescore or amuse as a live agent pane. The install path
-    # cannot carry it either: ~/.local/bin/muse-bin-<version> has no `muse` path
-    # COMPONENT, so the fm_harness_path_name fallback below never fires for it.
-    muse|muse-bin-*) printf 'agent' ;;
-    *claude*|*codex*|*opencode*|*grok*|*kimi*|pi|pi-signed|pi-launcher|Pi) printf 'agent' ;;
-    zsh|bash|sh|dash|ash|ksh|mksh|tcsh|csh|fish) printf 'shell' ;;
-    *)
-      if fm_harness_path_name "$path" >/dev/null || fm_harness_path_name "$argv0" >/dev/null; then
-        printf 'agent'
-      # cursor-agent runs as a bundled node script, so tmux reports the pane
-      # command as a bare `node` that no name pattern above can own, and its
-      # other installed name is the far-too-generic `agent` (verified live on
-      # cursor-agent 2026.08.11-e8db854: #{pane_current_command} is `node` while
-      # `ps -o comm=` carries the cursor-agent install path). Identity therefore
-      # comes from the narrowed structural rule in bin/fm-cursor-lib.sh, which
-      # demands Cursor's own name or install tree in the path or argv[0]. An
-      # unrelated `node` or `agent` matches nothing here and stays `other`,
-      # which the callers above fold into `ambiguous` rather than `dead`, so a
-      # stranger's node pane is never reported as an agent-free pane.
-      elif fm_cursor_process_matches "${path:-$argv0}" '' "$argv0"; then
-        printf 'agent'
-      else
-        printf 'other'
-      fi
-      ;;
-  esac
+  if ! command -v fm_backend_classify_process_name >/dev/null 2>&1; then
+    # shellcheck source=bin/fm-backend.sh
+    . "$FM_BACKEND_LIB_DIR/fm-backend.sh" || { printf 'other'; return 1; }
+  fi
+  fm_backend_classify_process_name "$@"
 }
 
 # fm_backend_tmux_foreground_comms: the kernel-side names of every process in
@@ -344,6 +322,55 @@ EOF
     shell) printf 'dead' ;;
     *) printf 'ambiguous' ;;
   esac
+}
+
+# fm_backend_tmux_shell_ready: the tmux half of fm_backend_shell_ready, decided
+# entirely by process identity.
+#
+# Window membership is confirmed FIRST, exactly as fm_backend_tmux_agent_state
+# does and for the same reason both raw pane reads below document: tmux answers
+# an absent target from the client's active window rather than failing, so a
+# pane field read without that guard can describe some other pane entirely - and
+# here that would be a readiness verdict about a stranger's pane. The guard is
+# repeated rather than inherited from the caller's earlier agent_state call,
+# because a window can disappear between the two polls and no contract should
+# rest on an ordering a future caller cannot see.
+#
+# `#{pane_current_command}` is tmux's own resolution of the pane tty's
+# foreground process, so a shell there means the pane is at a prompt - the
+# treehouse subshell every task pane runs inside answers this exactly as the
+# top-level shell would.
+# `#{pane_pid}` is the shell tmux spawned for the pane, and nothing the task
+# started can escape its subtree, so the shared full-tree scan is what catches
+# the case the foreground-group classifier deliberately cannot see: a harness
+# left running in the pane's BACKGROUND.
+# An unreadable pane pid or process table refuses rather than guessing: this
+# proof runs after the old agent has already been stopped, and launching a
+# replacement over a harness that is merely invisible would put two agents on
+# one worktree.
+fm_backend_tmux_shell_ready() {  # <target>
+  local target=$1 session window windows pane_pid comm proof
+  case "$target" in
+    *:*:*|'':*|*:'') printf 'target-unreadable'; return 1 ;;
+    *:*) ;;
+    *) printf 'target-unreadable'; return 1 ;;
+  esac
+  session=${target%%:*}
+  window=${target#*:}
+  windows=$(LC_ALL=C tmux list-windows -t "$session" -F '#{window_name}' 2>/dev/null) \
+    || { printf 'inventory-unreadable'; return 1; }
+  printf '%s\n' "$windows" | grep -Fqx "$window" || { printf 'window-missing'; return 1; }
+  comm=$(fm_backend_tmux_current_command "$target") || comm=
+  [ -n "$comm" ] || { printf 'pane-command-unreadable'; return 1; }
+  case "$(fm_backend_tmux_classify_process_name "$comm")" in
+    shell) ;;
+    agent) printf 'foreground-agent'; return 1 ;;
+    *) printf 'foreground-not-shell'; return 1 ;;
+  esac
+  pane_pid=$(tmux display-message -p -t "$target" '#{pane_pid}' 2>/dev/null) || pane_pid=
+  pane_pid=$(printf '%s' "$pane_pid" | tr -d '[:space:]')
+  proof=$(fm_backend_pid_tree_agent_free "$pane_pid") || { printf '%s' "$proof"; return 1; }
+  printf 'foreground-shell-no-agent'
 }
 
 # Backward-compatible three-state view for callers that only need a yes/no

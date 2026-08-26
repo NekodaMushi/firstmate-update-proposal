@@ -33,6 +33,11 @@ case "${1:-}" in
       esac
     done
     printf 'send-keys target=%s literal=%s arg=%s\n' "$target" "$literal" "${1:-}" >> "$FM_TMUX_LOG"
+    # FM_FAKE_TMUX_SEND_TEXT_FAIL fails the literal type itself: nothing reaches
+    # the pane, which is the only outcome fm-send may report as not sent.
+    if [ "$literal" = 1 ] && [ -n "${FM_FAKE_TMUX_SEND_TEXT_FAIL:-}" ]; then
+      exit 1
+    fi
     # FM_FAKE_TMUX_SEND_KEY_FAIL names one key whose delivery fails, so the
     # --key exit contract can be driven both ways from the same stub.
     if [ "$literal" = 0 ] && [ -n "${FM_FAKE_TMUX_SEND_KEY_FAIL:-}" ] \
@@ -53,7 +58,13 @@ case "${1:-}" in
     if [ -n "${FM_FAKE_TMUX_DEAD_TARGET:-}" ] && [ "$target" = "$FM_FAKE_TMUX_DEAD_TARGET" ]; then
       exit 1
     fi
-    [ "$cursor" = 1 ] && { printf '1\n'; exit 0; }
+    # FM_FAKE_TMUX_CURSOR_UNREADABLE is the post-submit read-back an exited or
+    # redrawn harness leaves behind: the typed text and Enter landed, but the
+    # composer's cursor row cannot be read, so the submit verdict is unknown.
+    if [ "$cursor" = 1 ]; then
+      [ -z "${FM_FAKE_TMUX_CURSOR_UNREADABLE:-}" ] || exit 1
+      printf '1\n'; exit 0
+    fi
     printf '%%1\n'
     exit 0 ;;
   capture-pane)
@@ -204,6 +215,36 @@ test_healthy_fm_id_send_still_works() {
 # nonzero and name the key.
 # Both directions are asserted from one stub so the failing case cannot go
 # quietly vacuous if the key ever stops being delivered at all.
+# The two nonzero send outcomes are different facts, and a lifecycle caller acts
+# on the difference: bin/fm-control.sh's exit verb reports a transport failure
+# only for the send that delivered nothing, and defers to its own agent-state
+# postcondition when the text was typed but the submit could not be read back.
+# Collapsing both into one status made a stubborn agent read as an unreachable
+# endpoint.
+test_undelivered_and_unconfirmed_sends_have_distinct_statuses() {
+  local dir fb home err log rc
+  dir="$TMP_ROOT/send-status"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); home=$(setup_home sendstatus); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
+  fm_write_meta "$home/state/lane-status.meta" "window=sess:fm-lane-status" "kind=ship"
+
+  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
+    FM_FAKE_TMUX_SEND_TEXT_FAIL=1 \
+    "$SEND" lane-status "never typed" >/dev/null 2>"$err"; rc=$?
+  expect_code 1 "$rc" "a literal send that failed delivered nothing and must exit 1"
+  assert_contains "$(cat "$err")" "text not sent" "the undelivered case should say the text was not sent"
+  assert_not_contains "$(cat "$log")" "literal=0 arg=Enter" "a failed type must not be submitted"
+
+  : > "$log"
+  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
+    FM_FAKE_TMUX_CURSOR_UNREADABLE=1 \
+    "$SEND" lane-status "typed but unreadable" >/dev/null 2>"$err"; rc=$?
+  expect_code 4 "$rc" "a typed and submitted send whose read-back is unreadable must exit 4"
+  assert_contains "$(cat "$err")" "text not submitted" "the unconfirmed case should say the submit is unconfirmed"
+  assert_contains "$(cat "$log")" "literal=1 arg=typed but unreadable" "the unconfirmed case should still have typed the text"
+  assert_contains "$(cat "$log")" "literal=0 arg=Enter" "the unconfirmed case should still have sent Enter"
+  pass "fm-send: an undelivered send and an unconfirmed submit report distinct exit statuses"
+}
+
 test_key_send_exit_status_follows_delivery() {
   local dir fb home err log rc
   dir="$TMP_ROOT/key-exit"; mkdir -p "$dir"
@@ -227,6 +268,7 @@ test_key_send_exit_status_follows_delivery() {
 
 test_exact_lane_id_send_still_works
 test_key_send_exit_status_follows_delivery
+test_undelivered_and_unconfirmed_sends_have_distinct_statuses
 test_unset_fm_home_fails
 test_unresolvable_target_does_not_tmux_fallback
 test_prefixless_herdr_pane_id_fails

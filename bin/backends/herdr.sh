@@ -1937,6 +1937,68 @@ fm_backend_herdr_agent_state() {  # <target>
   esac
 }
 
+# fm_backend_herdr_shell_ready: the Herdr half of fm_backend_shell_ready, asked
+# in this backend's own vocabulary rather than a borrowed one.
+#
+# It deliberately does NOT reuse fm_backend_herdr_pane_idle_shell_pid above.
+# That proof demands the pane's own creation shell be the sole foreground
+# process with no child at all, which is right for closing a husk pane but is
+# never true of a task pane: fm-spawn.sh runs `treehouse get`, and every task
+# then lives inside that foreground SUBSHELL - the same subshell
+# fm_backend_herdr_current_path exists to follow.
+#
+# Two questions, both by identity:
+#   1. Is the pane at a prompt? Every foreground process must be a recognized
+#      shell. An entry this cannot NAME is a refusal, never a skip: a dropped
+#      element would let an unidentified program hold the pane's foreground
+#      while the count of names still looked like a lone shell.
+#   2. Is anything still running behind it? fm_backend_herdr_agent_state answers
+#      from Herdr's agent REGISTRY, and a harness whose agent record is gone is
+#      still a live process, so the registry cannot close this. The pane's own
+#      `shell_pid` roots the same full process-tree scan the tmux adapter uses,
+#      which is where a backgrounded harness actually shows up.
+# Every read refuses rather than guessing: this runs after the old agent has
+# been stopped, and a false `ready` puts a second agent on a live worktree.
+fm_backend_herdr_shell_ready() {  # <target>
+  local info shell_pid count names named name proof
+  fm_backend_herdr_parse_target "$1" || { printf 'unreadable'; return 1; }
+  info=$(fm_backend_herdr_cli "$FM_BACKEND_HERDR_SESSION" \
+    pane process-info --pane "$FM_BACKEND_HERDR_PANE" 2>/dev/null) \
+    || { printf 'process-info-unreadable'; return 1; }
+  printf '%s' "$info" | jq -e --arg pane "$FM_BACKEND_HERDR_PANE" '
+    .result.type == "pane_process_info"
+    and .result.process_info.pane_id == $pane
+  ' >/dev/null 2>&1 || { printf 'process-info-unreadable'; return 1; }
+  count=$(printf '%s' "$info" | jq -er \
+    '.result.process_info.foreground_processes | select(type == "array") | length' 2>/dev/null) \
+    || { printf 'process-info-unreadable'; return 1; }
+  [ "$count" -ge 1 ] || { printf 'process-info-unreadable'; return 1; }
+  names=$(printf '%s' "$info" | jq -r '
+    .result.process_info.foreground_processes[]
+    | (.argv0 // (.argv[0]? ) // .name)
+    | select(type == "string" and length > 0)
+  ' 2>/dev/null) || { printf 'process-info-unreadable'; return 1; }
+  named=$(printf '%s\n' "$names" | grep -c '[^[:space:]]') || named=0
+  [ "$named" -eq "$count" ] || { printf 'foreground-process-unnamed'; return 1; }
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    name=${name##*/}
+    name=${name#-}
+    case "$name" in
+      sh|bash|zsh|dash|ash|ksh|mksh|tcsh|csh|fish) ;;
+      *) printf 'foreground-not-shell'; return 1 ;;
+    esac
+  done <<EOF
+$names
+EOF
+  shell_pid=$(printf '%s' "$info" | jq -er \
+    '.result.process_info.shell_pid | select(type == "number" and . > 1) | floor' 2>/dev/null) \
+    || { printf 'process-info-unreadable'; return 1; }
+  proof=$(FM_BACKEND_PS_BIN="${FM_HERDR_PS_BIN:-${FM_BACKEND_PS_BIN:-ps}}" \
+    fm_backend_pid_tree_agent_free "$shell_pid") || { printf '%s' "$proof"; return 1; }
+  printf 'foreground-shell-no-agent'
+}
+
 # Backward-compatible three-state view for callers that only need a yes/no
 # agent verdict. The detailed state contract is owned by fm_backend_agent_state.
 fm_backend_herdr_agent_alive() {  # <target>

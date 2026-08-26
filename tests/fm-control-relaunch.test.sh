@@ -72,6 +72,18 @@ case "${1:-}" in
       printf '%s\n' "$payload" >> "$D/literal"
       case "$payload" in
         /exit|/quit)
+          # FM_FAKE_EXIT_REAP_DELAY models the real race: the send fails its
+          # read-back because the exit already destroyed the composer, while the
+          # exiting process has not been reaped yet, so the very next
+          # agent-state probe still reports the agent alive.
+          if [ -n "${FM_FAKE_EXIT_REAP_DELAY:-}" ]; then
+            printf '%s' "$FM_FAKE_EXIT_REAP_DELAY" > "$D/reap-countdown"
+            exit 1
+          fi
+          # FM_FAKE_EXIT_TRANSPORT_FAIL_ALIVE is the genuine transport
+          # failure: the keystrokes never reached the pane, so the agent is
+          # still running when the bounded postcondition expires.
+          [ -z "${FM_FAKE_EXIT_TRANSPORT_FAIL_ALIVE:-}" ] || exit 1
           printf 'zsh' > "$D/command"
           [ -z "${FM_FAKE_EXIT_TRANSPORT_FAIL_AFTER_STOP:-}" ] || exit 1
           ;;
@@ -99,7 +111,18 @@ case "${1:-}" in
     for a in "$@"; do
       case "$a" in
         *cursor_y*) printf '1\n'; exit 0 ;;
-        *pane_current_command*) cat "$D/command"; printf '\n'; exit 0 ;;
+        *pane_pid*) printf '%s\n' "${FM_FAKE_PANE_PID:-4242}"; exit 0 ;;
+        *pane_current_command*)
+          if [ -f "$D/reap-countdown" ]; then
+            n=$(cat "$D/reap-countdown")
+            if [ "$n" -le 0 ]; then
+              printf 'zsh' > "$D/command"
+              rm -f "$D/reap-countdown"
+            else
+              printf '%s' "$((n - 1))" > "$D/reap-countdown"
+            fi
+          fi
+          cat "$D/command"; printf '\n'; exit 0 ;;
         *pane_current_path*)
           if [ -n "${FM_FAKE_CWD_RACE_READY:-}" ]; then
             : > "$FM_FAKE_CWD_RACE_READY"
@@ -109,7 +132,13 @@ case "${1:-}" in
       esac
     done
     printf 'fakepane\n'; exit 0 ;;
-  capture-pane) printf '╭────╮\n│    │\n╰────╯\n'; exit 0 ;;
+  capture-pane)
+    if [ "$(cat "$D/command")" = zsh ]; then
+      printf '$ \n'
+    else
+      printf '╭────╮\n│    │\n╰────╯\n'
+    fi
+    exit 0 ;;
   list-windows) [ -f "$D/windows" ] && cat "$D/windows"; exit 0 ;;
 esac
 exit 0
@@ -120,6 +149,39 @@ SH
 exit 0
 SH
   chmod +x "$fb/sleep"
+
+  # The production pane topology: tmux's pane shell plus the `treehouse get`
+  # subshell every task runs inside. No harness remains once the agent has
+  # stopped, so this is the bare shell the relaunch handoff must accept.
+  cat > "$fb/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+pane_pid=${FM_FAKE_PANE_PID:-4242}
+subshell_pid=$((pane_pid + 1))
+emit_rows() {  # <with-args>
+  if [ "$1" = 1 ]; then
+    printf '%s 1 /bin/zsh\n' "$pane_pid"
+    printf '%s %s -zsh\n' "$subshell_pid" "$pane_pid"
+    [ "${FM_FAKE_ORPHANED_AGENT:-0}" != 1 ] \
+      || printf '%s %s /home/fake/.local/bin/claude --resume\n' "$((pane_pid + 2))" "$subshell_pid"
+    [ "${FM_FAKE_UNRELATED_CHILD:-0}" != 1 ] \
+      || printf '%s %s git commit -m claude wrote this\n' "$((pane_pid + 3))" "$subshell_pid"
+  else
+    printf '%s 1\n' "$pane_pid"
+    printf '%s %s\n' "$subshell_pid" "$pane_pid"
+    [ "${FM_FAKE_ORPHANED_AGENT:-0}" != 1 ] || printf '%s %s\n' "$((pane_pid + 2))" "$subshell_pid"
+    [ "${FM_FAKE_UNRELATED_CHILD:-0}" != 1 ] || printf '%s %s\n' "$((pane_pid + 3))" "$subshell_pid"
+  fi
+}
+case "$*" in
+  *"-axo pid=,ppid=,args="*) emit_rows 1; exit 0 ;;
+  *"-axo pid=,ppid="*) emit_rows 0; exit 0 ;;
+  *"-o comm="*) printf 'zsh\n'; exit 0 ;;
+  *"-o stat="*) printf 'Ss\n'; exit 0 ;;
+esac
+exit 1
+SH
+  chmod +x "$fb/ps"
 }
 
 # new_case <name> [id] -> echoes a case dir with a live claude ship task.
@@ -987,16 +1049,53 @@ test_stop_transport_failure_reconciles_a_dead_agent() {
   add_ship_task "$dir" rl25 claude
   out=$(FM_FAKE_EXIT_TRANSPORT_FAIL_AFTER_STOP=1 \
     run_control "$dir" rl25 relaunch --note "preserve this after stop"); rc=$?
-  expect_code 1 "$rc" "a stop transport failure should fail closed"$'\n'"$out"
-  [ "$(cat "$dir/fake/command")" = zsh ] || fail "the fixture should stop the old agent before reporting transport failure"
-  [ "$(journal_field "$dir" rl25 phase)" = failed:stopping ] \
-    || fail "the journal should retain the pre-stop phase on a partial stop"
-  [ "$(journal_field "$dir" rl25 rollback)" = prior-record-kept-agent-dead ] \
-    || fail "rollback should reconcile the observed dead agent"
-  assert_contains "$out" "no agent is running" "the failure should report the reconciled dead state"
+  expect_code 0 "$rc" "a transport error after the old agent stopped should defer to the verified postcondition"$'\n'"$out"
+  [ "$(cat "$dir/fake/command")" = claude ] \
+    || fail "the replacement should launch after the old agent's exit is independently proven"
+  [ "$(journal_field "$dir" rl25 phase)" = complete ] \
+    || fail "the journal should record the replacement as complete"
+  assert_not_contains "$out" "error: text not sent" \
+    "a verified successful exit must not retain fm-send's provisional transport error"
   assert_grep "preserve this after stop" "$dir/home/data/rl25/brief.md" \
-    "the progress note should survive once the old agent has stopped"
-  pass "fm-control relaunch: partial stop reconciles actual agent state"
+    "the progress note should survive the replacement"
+  pass "fm-control relaunch: a verified exit postcondition resolves an ambiguous transport result"
+}
+
+test_stop_transport_failure_with_a_live_agent_refuses() {
+  local dir out rc
+  dir=$(new_case stoplive rl31)
+  add_ship_task "$dir" rl31 claude
+  out=$(FM_FAKE_EXIT_TRANSPORT_FAIL_ALIVE=1 \
+    run_control "$dir" rl31 relaunch --note "never reached the pane"); rc=$?
+  expect_code 1 "$rc" "a send failure whose agent is still alive is a real transport failure"$'\n'"$out"
+  assert_contains "$out" "the exit command could not be sent to task rl31" \
+    "the refusal should name the transport failure, not an unconfirmed exit"
+  assert_contains "$out" "error: text not sent" \
+    "fm-send's own diagnosis must survive to the operator"
+  [ "$(cat "$dir/fake/command")" = claude ] \
+    || fail "a failed exit must leave the original agent running"
+  assert_no_grep 'encode launch-brief' "$dir/fake/literal" \
+    "no replacement may launch when the old agent was never stopped"
+  [ "$(journal_field "$dir" rl31 phase)" = failed:stopping ] \
+    || fail "the journal should record the failure while stopping"
+  [ "$(journal_field "$dir" rl31 rollback)" = instructions-restored-agent-alive ] \
+    || fail "a still-running agent's original instructions should be restored"
+  pass "fm-control relaunch: a transport failure with a live agent refuses and keeps the agent"
+}
+
+test_stop_reconciles_an_unread_verdict_before_the_agent_is_reaped() {
+  local dir out rc
+  dir=$(new_case reaprace rl26)
+  add_ship_task "$dir" rl26 claude
+  out=$(FM_FAKE_EXIT_REAP_DELAY=1 \
+    run_control "$dir" rl26 relaunch --note "survive the reap race"); rc=$?
+  expect_code 0 "$rc" "an unread submit verdict must defer to the bounded agent-state proof"$'\n'"$out"
+  [ "$(cat "$dir/fake/command")" = claude ] \
+    || fail "the replacement should launch once the exiting agent is actually reaped"
+  [ "$(journal_field "$dir" rl26 phase)" = complete ] \
+    || fail "the journal should record the replacement as complete"
+  assert_contains "$out" "relaunched rl26" "a reconciled exit should still report the relaunch"
+  pass "fm-control relaunch: an exit whose process is not yet reaped is not a transport failure"
 }
 
 test_complete_journal_failure_rolls_back_from_durable_phase() {
@@ -1345,6 +1444,8 @@ test_launch_failure_keeps_the_prior_record_and_reports_it
 test_prepublication_failure_keeps_concurrent_durable_metadata
 test_post_publication_launch_failure_keeps_the_new_record
 test_stop_transport_failure_reconciles_a_dead_agent
+test_stop_transport_failure_with_a_live_agent_refuses
+test_stop_reconciles_an_unread_verdict_before_the_agent_is_reaped
 test_complete_journal_failure_rolls_back_from_durable_phase
 test_prepublication_abort_retires_replacement_wiring_and_busy_state
 test_journal_records_the_checkpoint_it_proved
