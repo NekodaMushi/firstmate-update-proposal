@@ -38,7 +38,8 @@ A recorded `harness=` is not always an exact adapter name: a task launched from 
 An exit that delivers lifecycle input but cannot prove the agent stopped fails with `exit=unconfirmed`, reports the observed agent state and any interrupt cancellation claim, and never claims that nothing changed.
 The exit command is submitted through the data plane's verified transport addressed to the exact recorded endpoint rather than the task selector, so text submission keeps one owner while the lifecycle command stays unmarked.
 No submit verdict decides an exit on its own, in either direction.
-A successful exit destroys the composer the verdict is read back from, so the transport can report an unconfirmed submit for a command that in fact landed; every send result therefore falls through to the same bounded agent-state proof, and an undelivered verdict is reported as a transport failure only once that proof has also failed.
+A successful exit destroys the composer the verdict is read back from, so the transport can report an unconfirmed submit for a command that in fact landed; every send result therefore falls through to the same bounded agent-state proof.
+Only a proven send failure becomes a transport failure once that proof has also failed: an unconfirmed submit typed the command into the endpoint, so its unproven fact is the stop, not the send.
 Interrupt never rewrites busy state as proof of its own success.
 Claude exposes no lifecycle acknowledgement for a manual interrupt, so delivery succeeds with `cancel=unconfirmed` and its adapter-owned busy state remains as observed.
 muse's session log records `terminal=cancelled` for the interrupted run, so the control plane reports `cancel=confirmed` only after observing that exact acknowledgement.

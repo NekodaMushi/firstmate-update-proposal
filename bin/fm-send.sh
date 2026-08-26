@@ -17,11 +17,15 @@
 # instead of silently leaving an unsubmitted instruction.
 # Exit status contract: 0 = submit confirmed (or, for a remote secondmate
 # target, delivered with confirmation pending - see the remote paragraph);
-# 3 = the text was typed into the live endpoint and Enter was sent, but the
-# submit read-back stayed unconfirmed (verify the pane before any resend, and
-# never re-type blindly; a marked request's pending-reply expectation stays
-# armed because this outcome is not a proven failure); any other nonzero = the
-# send failed and nothing may be assumed delivered.
+# 3 = the text was typed into the live endpoint and Enter was sent, and the
+# composer still visibly holds it, so the submit stayed unconfirmed (verify the
+# pane before any resend, and never re-type blindly; a marked request's
+# pending-reply expectation stays armed because this outcome is not a proven
+# failure); 4 = the text was typed and Enter was sent, but the submit could not
+# be read back at all, so neither delivery nor loss is proven (do not resend
+# blindly either; a caller holding its own postcondition, such as the exit verb
+# in bin/fm-control.sh, can settle what this read-back could not); any other
+# nonzero = the send failed and nothing may be assumed delivered.
 # Submission dispatches through the target's recorded backend; the tmux adapter
 # shares its composer/submit core with the away-mode daemon via bin/fm-tmux-lib.sh.
 # Tune with FM_SEND_RETRIES (default 3) / FM_SEND_SLEEP (0.4).
@@ -642,11 +646,16 @@ else
       exit 3
       ;;
     *)
+      # The text reached the live endpoint and Enter was sent; only the
+      # read-back that would prove the submit came back unreadable. That is not
+      # the same fact as a send failure, and exit 4 keeps the two apart for a
+      # caller that can settle the outcome from its own postcondition. The
+      # expectation is still dropped: nothing here proves delivery.
       if [ "$PENDING_REPLY_CREATED" = 1 ] && [ -n "$PENDING_REPLY_CORR" ]; then
         fm_pending_reply_discard_undelivered "$STATE" "$PENDING_REPLY_CORR" || true
       fi
       echo "error: text not submitted to $T (delivery unconfirmed; verdict=${verdict:-unknown}; tried $RESOLUTION_TRIED)" >&2
-      exit 1
+      exit 4
       ;;
   esac
   # Delivery confirmed. Mark the pending expectation delivered without resolving

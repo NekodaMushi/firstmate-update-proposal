@@ -518,16 +518,20 @@ do_exit() {
     "$SCRIPT_DIR/fm-send.sh" "$T" "$cmd" 2>&1) || send_rc=$?
   # No send verdict is decisive here, in either direction. A successful exit
   # destroys the composer fm-send reads its verdict from, so the composer reads
-  # back as a bare shell prompt, which fm-send correctly reports as an
-  # unconfirmed submit (exit 1) rather than as delivery. A single instantaneous
-  # agent-state probe cannot separate that from a real transport failure either,
-  # because the exiting process has not necessarily been reaped yet. So EVERY
-  # send result falls through to the same bounded postcondition below, and a
-  # non-delivered verdict only becomes a transport failure once that bounded
-  # proof has also failed.
+  # back as a bare shell prompt or as nothing legible at all, which fm-send
+  # correctly reports as an unconfirmed submit (exit 3 or 4) rather than as
+  # delivery. A single instantaneous agent-state probe cannot separate that from
+  # a real transport failure either, because the exiting process has not
+  # necessarily been reaped yet. So EVERY send result falls through to the same
+  # bounded postcondition below, and only a PROVEN send failure - the one
+  # outcome fm-send reports as nothing delivered - is reported as a transport
+  # failure once that bounded proof has also failed. An unconfirmed submit typed
+  # the command into the endpoint, so the unproven fact there is the stop, not
+  # the send.
   state=$(wait_agent_state "$EXIT_WAIT" dead) || {
     case "$send_rc" in
-      0|3)
+      0|3|4)
+        [ "$send_rc" = 0 ] || [ -z "$send_output" ] || printf '%s\n' "$send_output" >&2
         die "exit-delivered $ID interrupt=$interrupt_result exit-command=delivered agent-state=$state exit=unconfirmed; the agent did not stop within ${EXIT_WAIT}s"
         ;;
       *)

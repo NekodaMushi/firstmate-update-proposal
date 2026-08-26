@@ -118,7 +118,12 @@ case "${1:-}" in
   display-message)
     for a in "$@"; do
       case "$a" in
-        *cursor_y*) printf '1\n'; exit 0 ;;
+        *cursor_y*)
+          # FM_FAKE_COMPOSER_UNREADABLE models the read-back an exiting harness
+          # leaves behind: the text and Enter landed, but the composer can no
+          # longer be read, so the submit verdict is unknown rather than proven.
+          [ -z "${FM_FAKE_COMPOSER_UNREADABLE:-}" ] || exit 1
+          printf '1\n'; exit 0 ;;
         *pane_current_command*) cat "$D/command"; printf '\n'; exit 0 ;;
         *pane_current_path*) cat "$D/cwd"; printf '\n'; exit 0 ;;
       esac
@@ -777,6 +782,26 @@ test_exit_accepts_agent_stopped_by_busy_interrupt() {
   pass "fm-control exit: an interrupt-stopped agent satisfies the gone-state postcondition"
 }
 
+test_unreadable_submit_verdict_reports_the_stop_not_a_transport_failure() {
+  local dir out rc
+  dir=$(new_case unreadable)
+  add_task "$dir" t1 claude
+  alive_as "$dir" claude
+  out=$(env FM_FAKE_NEVER_DIES=1 FM_FAKE_COMPOSER_UNREADABLE=1 PATH="$dir/fakebin:$PATH" \
+    FM_HOME="$dir/home" FM_FAKE_DIR="$dir/fake" FM_CONTROL_POLL=0.01 FM_CONTROL_EXIT_WAIT=0.05 \
+    "$CONTROL" t1 exit 2>&1); rc=$?
+  expect_code 1 "$rc" "an agent that ignores an unreadably-submitted exit command should fail closed"
+  [ "$(literals "$dir")" = /exit ] \
+    || fail "the exit command should still be typed into the endpoint"
+  assert_contains "$out" "did not stop" \
+    "an unconfirmed submit leaves the STOP unproven, not the send"
+  assert_contains "$out" "exit-command=delivered agent-state=alive exit=unconfirmed" \
+    "the failure should report the delivered lifecycle input and the observed agent state"
+  assert_not_contains "$out" "could not be sent" \
+    "typed lifecycle input must never be reported as a transport failure"
+  pass "fm-control exit: an unreadable submit verdict reports the unconfirmed stop, not a failed send"
+}
+
 test_agent_that_does_not_stop_fails_closed() {
   local dir out rc gen
   dir=$(new_case stubborn)
@@ -901,6 +926,7 @@ test_muse_interrupt_confirms_adapter_acknowledgement
 test_interrupt_revalidates_agent_after_acknowledgement_wait
 test_exit_accepts_agent_stopped_by_busy_interrupt
 test_agent_that_does_not_stop_fails_closed
+test_unreadable_submit_verdict_reports_the_stop_not_a_transport_failure
 test_grok_interrupt_without_acknowledgement_reports_unconfirmed
 test_grok_idle_footer_does_not_confirm_cancellation
 test_secondmate_control_command_carries_no_marker
