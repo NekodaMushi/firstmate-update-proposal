@@ -33,8 +33,8 @@ Workers read `gates.md` but never write it.
 At completion, firstmate runs `bin/fm-gates-check.sh <id>` against the task's isolated copy.
 The checker writes `data/<id>/gates-result.md`, which records `copy`, `head`, `checked`, and `timeout`, then per-gate verdicts with reasons and relevant output, and a summary with counts and exit code.
 A `gates.md` that declares no gate or carries any parse error earns file-level verdicts instead, and a parse error replaces every per-gate verdict because no `CHECK` runs; the checker's header spells those out.
-`gates-result.md` is the completion artifact and the checker's sole write target.
-The checker never edits `gates.md` or any file in the task's isolated copy; its header remains the single owner of both file layouts, verdict rules, and exit codes.
+`gates-result.md` is the completion artifact and the only file the checker writes, leaving `gates.md` and every file in the isolated copy untouched.
+That header remains the single owner of both file layouts, the verdict rules, and the exit codes.
 
 ## Pi Calm preference (config/calm)
 

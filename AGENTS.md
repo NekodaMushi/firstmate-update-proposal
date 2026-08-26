@@ -292,7 +292,7 @@ Record the resulting mode, `yolo` merge posture, and the one-line reason for any
 Treat file or subsystem overlap as a risk signal rather than an automatic reason to wait, and dispatch isolated work immediately with no concurrency cap when each change can be independently implemented and validated and the selected delivery path can reconcile ordinary rebases or conflicts.
 Serialize only for a true semantic dependency, shared mutable external state, incompatible concurrent migration, or another concrete condition that makes independent progress or reconciliation unsafe; same-file editing alone is insufficient, and genuine blockers remain durable.
 For a gated task, firstmate writes `data/<task-id>/gates.md` at intake using the `CHECK`, `EXPECT`, `EVIDENCE`, and `ABANDON` contract owned by `bin/fm-gates-check.sh`; the worker reads this file but never writes it.
-Any gate that can be translated into an executable test lands as a test in the delivery.
+Any gate that can be translated into an executable test lands as a test in the delivery; a scout writes no test and records it in its report as a proposed test instead.
 At completion, firstmate runs `bin/fm-gates-check.sh <task-id>` and treats `data/<task-id>/gates-result.md` as the completion artifact.
 Write the task-specific brief under section 11 before spawning.
 
@@ -336,6 +336,7 @@ After an autonomous merge, give the captain a one-line full-URL or local-main ou
 ### Validate
 
 For a no-mistakes ship, trigger validation on the same worker after its implementation commit, using the harness invocation owned by `harness-adapters`.
+For a gated task, run `bin/fm-gates-check.sh <id>` before starting that validation run, as the generated brief promises the worker.
 The task worker that starts a no-mistakes run drives the pipeline and owns every `no-mistakes axi run` and `no-mistakes axi respond` call through the next gate or outcome.
 Firstmate never invokes `no-mistakes axi respond` for a crew-owned run.
 Once validation starts, prefer routing new requirements to follow-up work rather than expanding the current task, unless a new requirement completely invalidates the work being validated; however, the smallest downstream changes needed to keep already accepted product or engineering behavior correct, add behavioral tests where an executable contract exists, or keep documentation accurate remain within the current task even when they touch files not named at intake, and corrections required to satisfy already accepted intent are not new requirements.
@@ -362,7 +363,7 @@ The worker reports the PR when CI first becomes green rather than waiting for me
 For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
 Run `bin/fm-pr-check.sh <id> <PR url>` - it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll.
 Tell the captain the PR's full URL, always the complete `https://...` link rather than a bare `#number`, a concise outcome summary, and the no-mistakes risk level when applicable.
-For a gated task, run `bin/fm-gates-check.sh <id>` at the phase the generated brief names and carry `data/<id>/gates-result.md` as the completion artifact before landing.
+For a gated task, run `bin/fm-gates-check.sh <id>` before the merge authority decides on a `direct-PR` PR and before accepting a `local-only` ready branch, and carry `data/<id>/gates-result.md` as the completion artifact.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine merge authority.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 
