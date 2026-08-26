@@ -29,6 +29,7 @@ Ordinary dead-direct-report recovery is owned by `stuck-crewmate-recovery`, whil
 Firstmate owns the lifecycle of these two files.
 At intake, firstmate writes `data/<id>/gates.md` by hand before the brief, and an existing gate file requires scaffolding that ship or scout brief with `bin/fm-brief.sh --gates`; a secondmate charter carries no gates and the flag is refused there.
 Workers read `gates.md` but never write it.
+A worker may run the checker to gauge its own progress, but every run replaces `gates-result.md` and keeps no earlier one, so firstmate's run on the delivered head is the last one before the artifact is recorded and supersedes any worker run.
 `gates.md` contains gate declarations with expected outcomes, `CHECK`, `EXPECT`, and `EVIDENCE` fields, and optional `ABANDON` entries; `bin/fm-gates-check.sh`'s header is the single owner of their exact grammar and verdict semantics.
 At completion, firstmate runs `bin/fm-gates-check.sh <id>` against the task's isolated copy.
 The checker writes `data/<id>/gates-result.md`, which records `copy`, `head`, `checked`, and `timeout`, then per-gate verdicts with reasons and relevant output, and a summary with counts and exit code.
