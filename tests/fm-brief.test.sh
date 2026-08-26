@@ -212,6 +212,19 @@ test_no_gates_output_is_byte_identical_to_baseline() {
   pass "fm-brief.sh: omitting --gates preserves the prior ship and scout scaffolds byte for byte"
 }
 
+# --gates now refuses to scaffold a brief that would call an absent gate file
+# authoritative, so every gated scaffold below writes its gates.md first, exactly
+# as firstmate does at intake.
+seed_gates() {
+  local home=$1 id=$2
+  mkdir -p "$home/data/$id"
+  printf '%s\n' \
+    "- [ ] G1: seeded acceptance gate for $id" \
+    '  CHECK: true' \
+    '  EXPECT: ' \
+    '  EVIDENCE: pending' > "$home/data/$id/gates.md"
+}
+
 # --gates is one shared worker contract for ships and scouts. Herdr isolation is
 # orthogonal, while persistent secondmates have no task gate file and must refuse
 # the option instead of accepting and discarding it.
@@ -219,6 +232,9 @@ test_gates_contract_and_kind_compatibility() {
   local home ship scout out status
   home="$TMP_ROOT/gates-option-home"
   mkdir -p "$home/data" "$home/state"
+  seed_gates "$home" gated-ship
+  seed_gates "$home" gated-scout
+  seed_gates "$home" gated-mate
 
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     "$ROOT/bin/fm-brief.sh" gated-ship fixture-repo --gates --mode no-mistakes --herdr-lab >/dev/null 2>&1 \
@@ -243,13 +259,15 @@ test_gates_contract_and_kind_compatibility() {
     "gates section overstated the worker's done status"
   assert_grep "firstmate runs the checker before starting validation" "$ship" \
     "gates section omitted the pre-validation firstmate check"
+  assert_grep "the checker's to write and firstmate's to judge" "$ship" \
+    "gated ship Rule 2 did not account for the write the checker invitation implies"
   assert_grep "blocked: gate <gate-id> impossible - <reason>" "$ship" \
     "gates section did not prescribe an impossible-gate status"
   assert_grep "Never abandon a gate silently" "$ship" \
     "gates section allowed silent gate abandonment"
   assert_grep "# Herdr isolation - HARD SAFETY CONTRACT" "$ship" \
     "--gates displaced the Herdr lab contract"
-  assert_no_grep "For a scout, record the proposed test" "$ship" \
+  assert_no_grep "in the report as a proposed test" "$ship" \
     "ship gates section carried the scout-only report carve-out"
 
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
@@ -258,6 +276,12 @@ test_gates_contract_and_kind_compatibility() {
   scout="$home/data/gated-scout/brief.md"
   assert_grep "# Acceptance gates" "$scout" "scout --gates brief omitted its section"
   assert_grep "SCOUT task" "$scout" "--gates displaced the scout contract"
+  assert_grep "firstmate runs the checker before accepting your report" "$scout" \
+    "scout gates section named a validation phase a scout brief does not have"
+  assert_no_grep "before starting validation" "$scout" \
+    "scout gates section kept the ship-only validation phase"
+  assert_grep "that write is the checker's and firstmate's to judge" "$scout" \
+    "gated scout Rule 2 did not account for the checker's result write"
 
   out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" gated-mate --secondmate --no-projects --gates 2>&1)
   status=$?
@@ -277,6 +301,9 @@ test_gates_landing_instruction_matches_delivery_contract() {
   local home brief
   home="$TMP_ROOT/gates-mode-home"
   mkdir -p "$home/data" "$home/state"
+  seed_gates "$home" gated-local
+  seed_gates "$home" gated-direct
+  seed_gates "$home" gated-report
 
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     "$ROOT/bin/fm-brief.sh" gated-local fixture-repo --gates --mode local-only >/dev/null 2>&1 \
@@ -317,12 +344,7 @@ test_emitted_gates_check_command_pins_the_home() {
   home="$TMP_ROOT/gates-check-home"
   decoy="$TMP_ROOT/gates-check-decoy"
   copy="$TMP_ROOT/gates-check-copy"
-  mkdir -p "$home/data" "$home/state" "$decoy/data" "$decoy/state" "$copy"
-
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-brief.sh" gated-check fixture-repo --gates --mode no-mistakes >/dev/null 2>&1 \
-    || fail "ship --gates scaffold failed"
-  brief="$home/data/gated-check/brief.md"
+  mkdir -p "$home/data/gated-check" "$home/state" "$decoy/data" "$decoy/state" "$copy"
 
   printf '%s\n' \
     '- [ ] G1: the gate file the brief names is the one that gets checked' \
@@ -330,6 +352,11 @@ test_emitted_gates_check_command_pins_the_home() {
     '  EXPECT: never-emitted-by-that-check' \
     '  EVIDENCE: pending' > "$home/data/gated-check/gates.md"
   printf 'worktree=%s\n' "$copy" > "$home/state/gated-check.meta"
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" gated-check fixture-repo --gates --mode no-mistakes >/dev/null 2>&1 \
+    || fail "ship --gates scaffold failed"
+  brief="$home/data/gated-check/brief.md"
 
   # shellcheck disable=SC2016  # the sed program is literal; no shell expansion is wanted.
   check_cmd=$(sed -n 's/^You may run `\(.*\)` to gauge progress.*$/\1/p' "$brief")
@@ -348,6 +375,66 @@ test_emitted_gates_check_command_pins_the_home() {
   [ -f "$home/data/gated-check/gates-result.md" ] \
     || fail "the emitted checker command did not write the result into the brief's own home"
   pass "fm-brief.sh: the emitted gates-check command carries its home and cannot pass silently"
+}
+
+# A bare boolean flag misspelled as `--flag=value` used to land in the positional
+# list and be forgotten, so the scaffold reported success while the brief silently
+# lacked the contract. Every such spelling, and any unrecognised option, must stop
+# the run instead: for --gates and --herdr-lab the dropped contract is a safety
+# contract, and the un-gated brief carries no sign that one was requested.
+test_boolean_flags_reject_a_value_instead_of_dropping_it() {
+  local home spelling out status
+  home="$TMP_ROOT/flag-value-home"
+  mkdir -p "$home/data" "$home/state"
+  seed_gates "$home" flag-value
+
+  for spelling in --gates=1 --gates=true --herdr-lab=1 --scout=yes --typo; do
+    out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+      "$ROOT/bin/fm-brief.sh" flag-value fixture-repo --mode no-mistakes "$spelling" 2>&1)
+    status=$?
+    expect_code 1 "$status" "$spelling was accepted instead of refused ($out)"
+    assert_contains "$out" "error:" "$spelling produced no error message"
+    assert_absent "$home/data/flag-value/brief.md" \
+      "$spelling was swallowed and a brief was scaffolded anyway"
+  done
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" flag-value fixture-repo --mode no-mistakes --gates >/dev/null 2>&1 \
+    || fail "the bare --gates spelling stopped working"
+  assert_grep "# Acceptance gates" "$home/data/flag-value/brief.md" \
+    "the bare --gates spelling no longer emits the contract"
+  pass "fm-brief.sh: a valued boolean flag or unknown option is refused, never filed as a positional"
+}
+
+# --gates declares data/<id>/gates.md authoritative, but nothing generates that
+# file: firstmate writes it at intake by hand. Scaffolding first would point the
+# worker at nothing and send the pinned checker down fm-gates-check.sh's
+# "no gates for <id>" exit 0, which reads as green. Refuse until the file exists.
+test_gates_requires_the_gate_file_to_exist() {
+  local home out status
+  home="$TMP_ROOT/gates-missing-home"
+  mkdir -p "$home/data" "$home/state"
+
+  out=$(FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" ungated-task fixture-repo --gates --mode no-mistakes 2>&1)
+  status=$?
+  expect_code 1 "$status" "--gates scaffolded a brief for a task with no gates.md ($out)"
+  assert_contains "$out" "$home/data/ungated-task/gates.md" \
+    "the refusal did not name the gate file the caller must write"
+  assert_absent "$home/data/ungated-task/brief.md" \
+    "the refused --gates run still wrote a brief"
+
+  seed_gates "$home" ungated-task
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" ungated-task fixture-repo --gates --mode no-mistakes >/dev/null 2>&1 \
+    || fail "--gates refused a task whose gates.md exists"
+  assert_grep "# Acceptance gates" "$home/data/ungated-task/brief.md" \
+    "the gated brief lost its section once the gate file existed"
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" plain-task fixture-repo --mode no-mistakes >/dev/null 2>&1 \
+    || fail "the gate-file precondition leaked onto an un-gated brief"
+  pass "fm-brief.sh: --gates refuses to declare an absent gate file authoritative"
 }
 
 # Registry with one project per delivery mode. fm-brief.sh no longer reads it -
@@ -892,6 +979,8 @@ test_no_gates_output_is_byte_identical_to_baseline
 test_gates_contract_and_kind_compatibility
 test_gates_landing_instruction_matches_delivery_contract
 test_emitted_gates_check_command_pins_the_home
+test_boolean_flags_reject_a_value_instead_of_dropping_it
+test_gates_requires_the_gate_file_to_exist
 test_ship_modes_generate_clean_briefs
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
