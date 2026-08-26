@@ -1,0 +1,130 @@
+
+==================== SCENARIO 1 - same-copy relaunch preserves commits and uncommitted files ====================
+
+# task rr1 as firstmate recorded it (state/rr1.meta)
+window=fmses:fm-rr1
+endpoint_task_id=rr1
+worktree=/tmp/fm-relaunch-tests.LHxUud/evidence-success/worktree
+project=/tmp/fm-relaunch-tests.LHxUud/evidence-success/project
+harness=claude
+kind=ship
+mode=no-mistakes
+yolo=off
+tasktmp=/tmp/fm-rr1
+model=sonnet
+effort=high
+
+# firstmate prewrote the relaunch note (data/rr1/relaunch-note.md)
+# Relaunch note
+
+Branch and validation state are recorded here.
+
+$ git -C '/tmp/fm-relaunch-tests.LHxUud/evidence-success/worktree' log --oneline
+8500d3d second
+22353a1 first
+89c13a5 initial
+
+$ git -C '/tmp/fm-relaunch-tests.LHxUud/evidence-success/worktree' status --short
+?? scratch.txt
+
+$ git -C '/tmp/fm-relaunch-tests.LHxUud/evidence-success/worktree' rev-parse --abbrev-ref HEAD
+task-rr1
+
+$ FM_HOME=<home> bin/fm-relaunch.sh rr1
+warning: /tmp/fm-relaunch-tests.LHxUud/evidence-success/home/data/rr1/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+relaunched rr1 harness=claude from=claude model=sonnet effort=high backend=tmux endpoint=fmses:fm-rr1 worktree=/tmp/fm-relaunch-tests.LHxUud/evidence-success/worktree
+(exit status 0)
+
+# keystrokes the fake endpoint received, in order
+/exit
+unset TRACEPARENT; env -u CURSOR_AGENT -u CURSOR_INVOKED_AS 
+CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --model 'sonnet' 
+--effort 'high' 
+"$('/home/fabien/.no-mistakes/worktrees/c7c4d0d40ca0/01M0Y96W9GVHCNPPQBK3QB4017/bin/fm-operational-i
+nput.sh' encode launch-brief < 
+'/tmp/fm-relaunch-tests.LHxUud/evidence-success/home/data/rr1/brief.md')"
+
+# worktree AFTER the relaunch
+
+$ git -C '/tmp/fm-relaunch-tests.LHxUud/evidence-success/worktree' log --oneline
+8500d3d second
+22353a1 first
+89c13a5 initial
+
+$ git -C '/tmp/fm-relaunch-tests.LHxUud/evidence-success/worktree' status --short
+?? scratch.txt
+
+$ cat '/tmp/fm-relaunch-tests.LHxUud/evidence-success/worktree/scratch.txt'
+uncommitted
+
+HEAD before = 8500d3da3e8e1b419f74587a3b484ad5fdf9420e
+HEAD after  = 8500d3da3e8e1b419f74587a3b484ad5fdf9420e
+same commit: YES
+uncommitted scratch.txt survived unchanged: YES
+
+# replacement instructions delivered to the fresh agent (data/rr1/brief.md)
+# Original instructions
+
+Continue the task.
+
+## Progress note (2026-08-26T06:40:30Z)
+
+This task was relaunched. Continue from here; the local copy and every
+uncommitted change are exactly as the previous worker left them.
+
+Before doing anything else, read /tmp/fm-relaunch-tests.LHxUud/evidence-success/home/data/rr1/relaunch-note.md and follow it. Treat every commit and uncommitted file already present in the recorded worktree as unverified until you have reconciled that note.
+
+# profile fields in state/rr1.meta after the relaunch
+window=fmses:fm-rr1
+worktree=/tmp/fm-relaunch-tests.LHxUud/evidence-success/worktree
+harness=claude
+kind=ship
+model=sonnet
+effort=high
+
+==================== SCENARIO 2 - refusal when the pane never proves it is a bare shell ====================
+
+# a harness is still alive in the pane process tree, behind a foreground shell
+
+$ PATH='/tmp/fm-relaunch-tests.LHxUud/evidence-orphan/fakebin':"$PATH" FM_FAKE_PANE_PID=4242 FM_FAKE_ORPHANED_AGENT=1 ps -axo pid=,ppid=,args=
+4242 1 /bin/zsh
+4243 4242 -zsh
+4244 4243 /home/fake/.local/bin/claude --resume
+
+$ FM_HOME=<home> bin/fm-relaunch.sh rr2
+error: task rr2's old agent stopped, but its endpoint did not become a verifiable bare shell within 0.03s (state: dead-but-agent-in-pane-tree); refusing to launch a replacement
+error: rr2's agent stopped but relaunch did not reach replacement launch; no agent is running, and its work plus progress note are preserved at /tmp/fm-relaunch-tests.LHxUud/evidence-orphan/worktree
+(exit status 1)
+
+# no replacement was launched: keystrokes sent to the endpoint
+/exit
+contains an fm-spawn launch template: NO (refused without launching)
+
+==================== SCENARIO 3 - refusal while a no-mistakes validation run owns the branch ====================
+
+# the run the endpoint reports for this worktree
+
+$ (cd '/tmp/fm-relaunch-tests.LHxUud/evidence-run/worktree' && PATH='/tmp/fm-relaunch-tests.LHxUud/evidence-run/fakebin':"$PATH" FM_FAKE_RUN_ACTIVE=1 no-mistakes axi status)
+run:
+  id: "RUN1"
+  branch: task-rr3
+  status: running
+  head: "797d167a4e9b6667da0dc70bb226ce75512761ce"
+  pr: ""
+steps[2]{step,status,findings,duration_ms}:
+  review,completed,0,1
+  test,running,0,1
+
+$ FM_HOME=<home> bin/fm-relaunch.sh rr3
+error: task rr3 has a no-mistakes run that has not reached a terminal outcome (active:running); relaunch is refused while a gate response may own the branch. Let the run reach a terminal outcome, or abort and recover custody as documented in this script header. Crew state: state: working · source: run-step · validating (running)
+(exit status 1)
+
+# the outgoing agent was left running and no input was sent
+pane foreground command: claude
+keystrokes sent: (none)
+
+==================== SCENARIO 4 - refusal when the relaunch note is missing ====================
+
+$ FM_HOME=<home> bin/fm-relaunch.sh rr4   # note file is zero bytes
+error: write the relaunch note at /tmp/fm-relaunch-tests.LHxUud/evidence-note/home/data/rr4/relaunch-note.md before replacing task rr4's agent; an empty note tells the replacement nothing
+(exit status 1)
