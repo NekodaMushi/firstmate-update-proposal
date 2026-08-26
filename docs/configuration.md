@@ -35,9 +35,7 @@ A worker may run the checker to gauge its own progress, and every run replaces `
 Within `data/<id>/` the checker reads only `gates.md`, so a superseded contract or result archived elsewhere in that directory, as a promoted scout's history under `archive/scout/` is, stays inert.
 `gates.md` contains gate declarations with expected outcomes, `CHECK`, `EXPECT`, and `EVIDENCE` fields, and optional `ABANDON` entries; `bin/fm-gates-check.sh`'s header is the single owner of their exact grammar and verdict semantics.
 At completion, firstmate runs `bin/fm-gates-check.sh <id>` against the task's isolated copy, which the checker resolves from `worktree=` in `state/<id>.meta` and checks as it stands on disk, uncommitted changes included.
-With no `data/<id>/gates.md` the checker reports that there is nothing to check and exits 0 without writing a result, so any `gates-result.md` still present then belongs to an earlier run.
 The checker writes `data/<id>/gates-result.md`, which records `copy`, `head`, `checked`, and `timeout`, then per-gate verdicts with reasons and relevant output, and a summary with counts and exit code.
-A `gates.md` that declares no gate or carries any parse error earns file-level verdicts instead, and a parse error replaces every per-gate verdict because no `CHECK` runs; the checker's header spells those out.
 `gates-result.md` is the completion artifact and the only file the checker writes, leaving `gates.md` and every file in the isolated copy untouched.
 That header remains the single owner of both file layouts, the verdict rules, and the exit codes.
 

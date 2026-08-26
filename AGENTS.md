@@ -298,7 +298,7 @@ A gate left unsatisfied, never checked, or abandoned without `--accept-abandon` 
 Only firstmate under its configured authority or the captain may waive such a gate, never the worker; record the gate, why it is invalid, obsolete, or disproportionate, who authorized it, and any replacement check or accepted residual risk, then re-run the checker against the revised contract until the recorded result passes.
 A result passes when it records `exit=0`, and the checker's header owns the exact conditions behind that code.
 The checker verifies the task's copy as it stands on disk, uncommitted changes included, rather than any particular commit.
-Firstmate runs the checker itself immediately before the acceptance decision and judges only that run's own result, because `gates-result.md` carries no run identity and any process with the home can have replaced it, so a result found on disk is never acceptance evidence.
+Firstmate runs the checker itself as the last action before the acceptance decision, on a copy that is clean and matches what is being landed, and judges only that run's own result, because `gates-result.md` carries no run identity and any process with the home can have replaced it, so a result found on disk is never acceptance evidence.
 Nothing may change in the copy between that run and acceptance.
 Write the task-specific brief under section 11 before spawning.
 
@@ -342,8 +342,6 @@ After an autonomous merge, give the captain a one-line full-URL or local-main ou
 ### Validate
 
 For a no-mistakes ship, trigger validation on the same worker after its implementation commit, using the harness invocation owned by `harness-adapters`.
-For a gated task, run `bin/fm-gates-check.sh <id>` before starting that validation run, as the generated brief promises the worker.
-Validation fix rounds change the copy, so re-run the checker once the last fix round has landed in it; only firstmate's final run decides the gates.
 The task worker that starts a no-mistakes run drives the pipeline and owns every `no-mistakes axi run` and `no-mistakes axi respond` call through the next gate or outcome.
 Firstmate never invokes `no-mistakes axi respond` for a crew-owned run.
 Once validation starts, prefer routing new requirements to follow-up work rather than expanding the current task, unless a new requirement completely invalidates the work being validated; however, the smallest downstream changes needed to keep already accepted product or engineering behavior correct, add behavioral tests where an executable contract exists, or keep documentation accurate remain within the current task even when they touch files not named at intake, and corrections required to satisfy already accepted intent are not new requirements.
@@ -370,7 +368,6 @@ The worker reports the PR when CI first becomes green rather than waiting for me
 For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
 Run `bin/fm-pr-check.sh <id> <PR url>` - it records `pr=` and the forge's `pr_head=` when available in the task's meta and arms the watcher's merge poll.
 Tell the captain the PR's full URL, always the complete `https://...` link rather than a bare `#number`, a concise outcome summary, and the no-mistakes risk level when applicable.
-For a gated task, run `bin/fm-gates-check.sh <id>` before the merge authority decides on a `direct-PR` PR and before accepting a `local-only` ready branch, and carry `data/<id>/gates-result.md` from that run as the completion artifact rather than landing on a result that does not pass.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine merge authority.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 
@@ -385,7 +382,6 @@ Retire one only on an explicit captain or main-firstmate decision, after loading
 ### Scout outcome and promotion
 
 A completed scout must leave a self-contained report before its scratch worktree can be discarded; read and relay its findings, record the report as the Done artifact, and re-evaluate the queue.
-For a gated scout, run `bin/fm-gates-check.sh <id>` before accepting that report and record `data/<id>/gates-result.md` beside it, and hold acceptance until that result passes.
 A report may recommend implementation but does not authorize it.
 Before treating the investigation or any visual review as complete, load `captain-hold-lifecycle`; teardown enforces that shared completion gate.
 When a scout's deliverable is a visual artifact the captain will iterate on, prefer keeping that scout alive to host its own Lavish loop rather than tearing it down and mediating from firstmate, so the scout keeps its investigation context and the captain iterates in one continuous session.
