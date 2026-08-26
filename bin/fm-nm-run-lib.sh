@@ -101,32 +101,48 @@ fm_nm_coarse_status_is_inactive() {  # <status>
 # plain human-oriented text, newest first, with columns
 # "<status> <branch> <short-sha> <date> [<pr-url>]" separated by runs of spaces
 # (verified: no quoting, so splitting on the first two whitespace runs is exact).
-# Echoes the first matching row's status word verbatim - the four seen today are
-# running/completed/cancelled/failed, but the word is passed through unjudged so
-# the caller's vocabulary decides - or empty when <branch> has no row within
-# <limit> whose code identity also matches <worktree> under
-# fm_nm_head_matches_worktree.
+# Three outcomes, and the caller must be able to tell them apart, because two of
+# them look identical as a bare string and mean opposite things:
+#   0 + a status word - the listing was read and this branch's row says that.
+#     The word is passed through unjudged (the four seen today are
+#     running/completed/cancelled/failed) so the caller's vocabulary decides.
+#   0 + empty - the listing was read and <branch> has no row within <limit>
+#     whose code identity also matches <worktree> under
+#     fm_nm_head_matches_worktree. There is no run to attribute.
+#   1 + a reason token - the listing could not be read, or a row that concerns
+#     <branch> could not be parsed. NOTHING was observed about this worktree,
+#     and a caller that treats this as "no run" is asserting something it never
+#     saw. The bounded call's exit status is what separates this from the empty
+#     case, so it is read directly rather than through fm_nm_run's fail-open
+#     wrapper, which discards it.
 fm_nm_runs_status_for_branch() {  # <worktree> <timeout_secs> <branch> <limit>
-  local wt=$1 timeout_secs=$2 branch=$3 limit=$4 out row st rest br sha
-  out=$(fm_nm_run "$wt" "$timeout_secs" runs --limit "$limit")
+  local wt=$1 timeout_secs=$2 branch=$3 limit=$4 out rc=0 row st rest br sha
+  out=$(fm_nm_run_checked "$wt" "$timeout_secs" runs --limit "$limit") || rc=$?
+  [ "$rc" -eq 0 ] || { printf 'runs-listing-failed:exit-%s' "$rc"; return 1; }
   [ -n "$out" ] || return 0
   while IFS= read -r row; do
     row=$(fm_nm_trim "$row")
     [ -n "$row" ] || continue
     st=${row%% *}
-    rest=${row#* }
-    rest=$(fm_nm_trim "$rest")
+    rest=$(fm_nm_trim "${row#* }")
     br=${rest%% *}
-    rest=${rest#* }
-    rest=$(fm_nm_trim "$rest")
-    sha=${rest%% *}
-    if [ "$br" = "$branch" ]; then
-      # Same code-identity rule as axi status: skip a same-branch row whose
-      # short-sha does not match this worktree (rewritten or advanced tip).
-      fm_nm_head_matches_worktree "$wt" "$sha" || continue
-      printf '%s' "$st"
-      return 0
-    fi
+    [ "$br" = "$branch" ] || continue
+    # A row this branch owns must carry the short-sha column the code-identity
+    # rule needs. Without it the trailing-field extraction below silently reads
+    # the branch name as the sha, which resolves as a rev and would attribute
+    # the row's status word to a run this worktree was never shown to be part of.
+    case "$rest" in
+      *[[:space:]]*) ;;
+      *) printf 'runs-row-unparseable'; return 1 ;;
+    esac
+    sha=$(fm_nm_trim "${rest#* }")
+    sha=${sha%% *}
+    [ -n "$sha" ] || { printf 'runs-row-unparseable'; return 1; }
+    # Same code-identity rule as axi status: skip a same-branch row whose
+    # short-sha does not match this worktree (rewritten or advanced tip).
+    fm_nm_head_matches_worktree "$wt" "$sha" || continue
+    printf '%s' "$st"
+    return 0
   done <<< "$out"
   return 0
 }
@@ -153,6 +169,13 @@ fm_nm_runs_status_for_branch() {  # <worktree> <timeout_secs> <branch> <limit>
 # A status or outcome word neither vocabulary knows is reported active, naming
 # the exact unrecognised word, because an unreadable answer from a live CLI is
 # not evidence that the run finished.
+#
+# The coarse rung holds the same line for its own failures. Only a listing that
+# was actually read licenses a verdict: a listing command that failed, timed
+# out, or produced a row for this branch that could not be parsed is reported
+# active with the concrete failure named, never as `no-run`. `no-run` is a
+# positive claim - the listing was read and this worktree has no run in it - so
+# nothing that was never observed may be reported that way.
 fm_nm_run_active_for_worktree() {  # <worktree> <timeout_secs> <runs-limit>
   local wt=$1 timeout_secs=$2 limit=$3 branch out run_branch outcome status coarse
   command -v no-mistakes >/dev/null 2>&1 || { printf 'no-cli'; return 1; }
@@ -172,7 +195,10 @@ fm_nm_run_active_for_worktree() {  # <worktree> <timeout_secs> <runs-limit>
     printf 'active:%s' "${status:-unknown}"
     return 0
   fi
-  coarse=$(fm_nm_runs_status_for_branch "$wt" "$timeout_secs" "$branch" "$limit")
+  coarse=$(fm_nm_runs_status_for_branch "$wt" "$timeout_secs" "$branch" "$limit") || {
+    printf 'active:%s' "${coarse:-runs-listing-unreadable}"
+    return 0
+  }
   [ -n "$coarse" ] || { printf 'no-run'; return 1; }
   if fm_nm_coarse_status_is_inactive "$coarse"; then
     printf 'ended:%s' "$coarse"

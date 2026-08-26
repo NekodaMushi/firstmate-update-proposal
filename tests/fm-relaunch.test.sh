@@ -100,6 +100,21 @@ EOF
     exit 0
   fi
   if [ "${1:-}" = runs ]; then
+    # Sentinels for the ways the listing itself can fail to answer, as opposed
+    # to answering with a word: the command failing, a row for this branch
+    # missing the short-sha column, and a listing read cleanly that simply has
+    # no row for this worktree.
+    case "$FM_FAKE_RUN_COARSE_STATUS" in
+      __listing-fails__)
+        echo "no-mistakes: unrecognized option '--limit'" >&2
+        exit 7
+        ;;
+      __row-truncated__) printf 'completed  %s\n' "$branch"; exit 0 ;;
+      __other-branch-only__)
+        printf 'running  someone-elses-branch  %s  2026-08-26\n' "$short"
+        exit 0
+        ;;
+    esac
     printf '%s  %s  %s  2026-08-26\n' "$FM_FAKE_RUN_COARSE_STATUS" "$branch" "$short"
     exit 0
   fi
@@ -417,6 +432,40 @@ test_refuses_on_an_unrecognized_coarse_run_status() {
   pass "fm-relaunch: an unrecognized coarse run status refuses instead of reading as finished"
 }
 
+test_refuses_when_the_coarse_runs_listing_cannot_be_read() {
+  local dir out rc
+  dir=$(new_case coarse-fails rr14)
+  out=$(FM_FAKE_RUN_COARSE_STATUS=__listing-fails__ run_relaunch "$dir" rr14); rc=$?
+  expect_code 1 "$rc" "a listing that never answered is not evidence that no run exists"
+  assert_contains "$out" "active:runs-listing-failed:exit-7" \
+    "the refusal should name the concrete listing failure, not claim there is no run"
+  [ ! -s "$dir/fake/literal" ] || fail "an unreadable run listing must send no lifecycle input"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "an unreadable run listing must leave the old agent running"
+  pass "fm-relaunch: a coarse runs listing that failed to answer refuses instead of reporting no-run"
+}
+
+test_refuses_an_unparseable_coarse_runs_row() {
+  local dir out rc
+  dir=$(new_case coarse-truncated rr15)
+  out=$(FM_FAKE_RUN_COARSE_STATUS=__row-truncated__ run_relaunch "$dir" rr15); rc=$?
+  expect_code 1 "$rc" "a row missing the column the code-identity rule needs proves nothing"
+  assert_contains "$out" "active:runs-row-unparseable" \
+    "the refusal should name the row it could not parse"
+  [ ! -s "$dir/fake/literal" ] || fail "an unparseable run row must send no lifecycle input"
+  [ "$(cat "$dir/fake/command")" = claude ] || fail "an unparseable run row must leave the old agent running"
+  pass "fm-relaunch: a coarse row without its short-sha column refuses rather than attributing its status"
+}
+
+test_relaunches_when_the_coarse_listing_has_no_row_for_this_branch() {
+  local dir out rc
+  dir=$(new_case coarse-norow rr16)
+  out=$(FM_FAKE_RUN_COARSE_STATUS=__other-branch-only__ run_relaunch "$dir" rr16); rc=$?
+  expect_code 0 "$rc" "a listing read cleanly with no row for this worktree owns nothing"$'\n'"$out"
+  assert_grep 'encode launch-brief' "$dir/fake/literal" \
+    "an observed empty result must stay a permission, so the refusals above are not blanket"
+  pass "fm-relaunch: a coarse listing that was read and holds no row for this branch still allows relaunch"
+}
+
 test_relaunches_on_a_recognized_finished_coarse_run_status() {
   local dir out rc
   dir=$(new_case coarse-completed rr13)
@@ -449,6 +498,9 @@ test_refuses_an_empty_relaunch_note
 test_refuses_a_secondmate_task
 test_refuses_while_a_no_mistakes_run_owns_the_branch
 test_refuses_on_an_unrecognized_coarse_run_status
+test_refuses_when_the_coarse_runs_listing_cannot_be_read
+test_refuses_an_unparseable_coarse_runs_row
+test_relaunches_when_the_coarse_listing_has_no_row_for_this_branch
 test_relaunches_on_a_recognized_finished_coarse_run_status
 test_refuses_while_a_run_is_parked_at_a_gate
 test_relaunches_once_the_run_reached_a_terminal_outcome

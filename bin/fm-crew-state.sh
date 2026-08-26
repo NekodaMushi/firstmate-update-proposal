@@ -385,7 +385,11 @@ nm_ci_checks_state() {
 # when the branch has no run within FM_CREW_STATE_RUNS_LIMIT rows.
 # The row parsing and the code-identity skip are owned by
 # fm_nm_runs_status_for_branch in bin/fm-nm-run-lib.sh, shared with the
-# relaunch path's run-ownership refusal.
+# relaunch path's run-ownership refusal. That owner also reports an unreadable
+# listing as a distinct failure, which this read-only reporter folds back into
+# "no coarse answer": relaunch must refuse on it, but a state report has nothing
+# to say about a listing it never read, and inventing a run here would be worse
+# than the silence.
 nm_runs_status_for_branch() {  # <branch>
   fm_nm_runs_status_for_branch "$WT" "$NM_TIMEOUT" "$1" "$FM_CREW_STATE_RUNS_LIMIT"
 }
@@ -426,7 +430,7 @@ if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/n
       # primary call means the CLI itself did not respond, so retrying it
       # immediately with a second bounded call would just double the wait
       # for no better answer.
-      COARSE_STATUS=$(nm_runs_status_for_branch "$CREW_BRANCH")
+      COARSE_STATUS=$(nm_runs_status_for_branch "$CREW_BRANCH") || COARSE_STATUS=""
       if [ -n "$COARSE_STATUS" ]; then
         HAVE_RUN=1
         RUN_SOURCE=coarse
