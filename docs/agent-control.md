@@ -82,6 +82,10 @@ It is not deterministic across the verified adapters: codex and grok resume only
 
 Switching harness is therefore one ordinary relaunch rather than a separate mechanism.
 
+An ordinary wedged ship or scout is replaced through [`bin/fm-relaunch.sh`](../bin/fm-relaunch.sh) rather than by naming this verb directly.
+It wraps the transaction above with the two preconditions the verb itself does not impose: a prewritten `data/<task-id>/relaunch-note.md`, passed on as the `--note` the replacement reads first, and a refusal while a no-mistakes run attributed to the recorded worktree may still owe a synchronous gate response.
+Calling `relaunch` directly stays right for a secondmate and for a deliberate harness, model, or effort switch.
+
 ### Failure and rollback
 
 - A refusal **before** the agent is stopped leaves the durable record and the instructions byte-identical.

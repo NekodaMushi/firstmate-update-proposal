@@ -247,7 +247,7 @@ The checkpoint is deliberately foreground and bounded so Codex regains control r
 |---|---|
 | Busy state | The Firstmate-owned plugin's semantic `session.status`: `busy` and `retry` are active, `idle` is inactive, latched to the worker's own session. |
 | Exit command | `/exit` |
-| Interrupt | double Escape; known flaky while a long shell command runs, so use `bin/fm-control.sh <task-id> relaunch` for a wedged pane |
+| Interrupt | double Escape; known flaky while a long shell command runs, so replace a wedged ship or scout pane through `bin/fm-relaunch.sh <task-id>`, or a secondmate's through `bin/fm-control.sh <task-id> relaunch` |
 
 No trust dialog.
 Opencode can auto-upgrade itself in the background and the running TUI can exit mid-task, observed live from 1.15.7 to 1.17.3.

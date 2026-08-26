@@ -37,16 +37,21 @@
 # still monitoring green checks - because the outgoing agent may be in the
 # synchronous response flow and replacing it would duplicate pipeline ownership.
 # fm-crew-state's verdict is reported with that refusal for context.
-# A run that answered but cannot be read as finished is refused the same way and
-# names what blocked it: a status or outcome word neither vocabulary knows, a
-# `no-mistakes runs` listing that failed or timed out, or a row for this branch
-# that could not be parsed.
-# Nothing was observed about the run in those cases, so the answer is to run this
-# command again once the CLI answers cleanly, not to abort anything.
+# Let that response reach a terminal outcome first.
+#
+# A run that answered but cannot be read as finished is refused the same way, and
+# the refusal states which case it is instead of claiming a live run was seen.
+# Attribution itself failing - a `no-mistakes runs` listing that failed or timed
+# out, or a row for this branch that could not be parsed - means nothing at all
+# was observed about a run here.
+# A status or outcome word neither vocabulary knows means a run was attributed
+# but its state is unreadable.
+# Either way the answer is to run this command again once the CLI answers
+# cleanly, not to abort anything.
 # A CLI that cannot answer at all - absent, or silent within the bounded wait -
 # does not block the relaunch, because requiring a healthy toolchain would
 # strand exactly the wedged worker this command exists to rescue.
-# Let that response reach a terminal outcome first.
+#
 # If the outgoing agent cannot finish the response, abort the run with the
 # supported no-mistakes command, confirm it stopped, follow branch_sync.next_action
 # (including recover_custody only when requested), then refresh the relaunch note
@@ -178,7 +183,22 @@ if [ "$KIND" = ship ]; then
   RUN_ACTIVITY=$(fm_nm_run_active_for_worktree \
     "$WORKTREE" "$FM_RELAUNCH_NM_TIMEOUT" "$FM_RELAUNCH_RUNS_LIMIT") && {
     CREW_STATE=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-crew-state.sh" "$ID" 2>/dev/null || true)
-    echo "error: task $ID has a no-mistakes run that has not reached a terminal outcome ($RUN_ACTIVITY); relaunch is refused while a gate response may own the branch. Let the run reach a terminal outcome, or abort and recover custody as documented in this script header. Crew state: ${CREW_STATE:-unavailable}" >&2
+    # Every refusal token arrives on the same fail-closed answer, so the message
+    # must report only what was actually observed. An operator told a run is
+    # going will go looking for one to let finish or abort; when attribution is
+    # what failed, there may be no run at all and the thing to do is retry once
+    # the no-mistakes CLI answers.
+    case "$RUN_ACTIVITY" in
+      active:runs-listing-failed:*|active:runs-listing-unreadable|active:runs-row-unparseable)
+        echo "error: task $ID's no-mistakes run attribution failed ($RUN_ACTIVITY), so fm-relaunch cannot rule out a gate response that owns the branch; nothing was observed about a run here. Run this command again once the no-mistakes CLI answers cleanly. Crew state: ${CREW_STATE:-unavailable}" >&2
+        ;;
+      active:unrecognized-status:*)
+        echo "error: task $ID has a no-mistakes run whose state word is one this version does not know ($RUN_ACTIVITY), so it cannot be read as finished; relaunch is refused while a gate response may own the branch. Run this command again once the run reports a recognized status. Crew state: ${CREW_STATE:-unavailable}" >&2
+        ;;
+      *)
+        echo "error: task $ID has a no-mistakes run that has not reached a terminal outcome ($RUN_ACTIVITY); relaunch is refused while a gate response may own the branch. Let the run reach a terminal outcome, or abort and recover custody as documented in this script header. Crew state: ${CREW_STATE:-unavailable}" >&2
+        ;;
+    esac
     exit 1
   }
 fi
