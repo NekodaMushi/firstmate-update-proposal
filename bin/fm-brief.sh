@@ -13,6 +13,11 @@
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
 #   --gates adds the worker contract for the firstmate-owned acceptance gates at
 #   data/<task-id>/gates.md. It applies to ship and scout briefs, never secondmates.
+#   Where an automatable gate lands follows the brief's own delivery path: the PR
+#   for a no-mistakes or direct-PR ship, the task branch for local-only, the report
+#   for a scout. The emitted fm-gates-check.sh invocation carries this home's
+#   FM_HOME/FM_DATA_OVERRIDE/FM_STATE_OVERRIDE, because a crewmate pane does not
+#   inherit them and the checker exits 0 on a home holding no gates.md.
 #   See docs/configuration.md "Task gates" for the schema-owner reference.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
@@ -278,14 +283,27 @@ REPO=${POS[1]}
 
 GATES_INSERT=
 if [ "$GATES" -eq 1 ]; then
+# The worker's pane does not inherit firstmate's home environment (bin/fm-spawn.sh
+# injects FM_HOME only for secondmates), and a checker run against the wrong home
+# finds no gates.md and exits 0 - a silent pass. Pin the home on the command itself.
+GATES_CHECK_CMD="FM_HOME=$(shell_quote "$FM_HOME") FM_DATA_OVERRIDE=$(shell_quote "$DATA") FM_STATE_OVERRIDE=$(shell_quote "$STATE") $(shell_quote "$FM_ROOT/bin/fm-gates-check.sh") $(shell_quote "$ID")"
+# One contract, but the line about where an automated gate lands must agree with
+# the delivery path this same brief prescribes below: a scout opens no PR and a
+# local-only ship never pushes one.
+if [ "$KIND" = scout ]; then
+  GATES_TEST_LINE="Record every gate that can be expressed as an automated test in the report as a proposed test, so it can land if the scout is promoted; write no test and open no PR here."
+elif [ "$MODE" = local-only ]; then
+  GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed on your \`fm/$ID\` branch, so it travels with the branch firstmate merges."
+else
+  GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so validation and CI run it."
+fi
 IFS= read -r -d '' GATES_SECTION <<EOF || true
 # Acceptance gates
 \`$DATA/$ID/gates.md\` is authoritative for this task.
 Read it, but do not edit it.
 Do not create or modify \`$DATA/$ID/gates-result.md\` yourself; if you run the checker below, the checker alone owns that result-file write.
-Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so validation and CI run it.
-For a scout, record the proposed test in the report so it can land if the scout is promoted; do not open a PR.
-You may run \`$FM_ROOT/bin/fm-gates-check.sh $ID\` to gauge progress, but only firstmate's run counts.
+$GATES_TEST_LINE
+You may run \`$GATES_CHECK_CMD\` to gauge progress, but only firstmate's run counts.
 A \`done:\` status means only "I believe the gates pass", not "the task is finished"; firstmate runs the checker before starting validation.
 If you believe a gate is impossible, append \`blocked: gate <gate-id> impossible - <reason>\` to the status file.
 Never abandon a gate silently, and never write an abandonment into \`$DATA/$ID/gates.md\`.

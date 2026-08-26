@@ -180,27 +180,36 @@ test_help_includes_entire_header() {
   pass "fm-brief.sh: --help renders the complete header"
 }
 
-# The no-option scaffold is a checked-in capture from immediately before
-# --gates was added. Normalize only the two caller-specific absolute roots, then
-# compare the executable's public output byte for byte so the opt-in feature
-# cannot perturb an ordinary scaffold by even one newline.
+# The no-option scaffolds are checked-in captures from immediately before
+# --gates was added, one per heredoc the option interpolates into. Normalize only
+# the two caller-specific absolute roots, then compare the executable's public
+# output byte for byte so the opt-in feature cannot perturb an ordinary scaffold
+# by even one newline.
 test_no_gates_output_is_byte_identical_to_baseline() {
-  local home brief normalized
+  local case_spec id fixture brief normalized home
   home="$TMP_ROOT/no-gates-baseline-home"
   mkdir -p "$home/data" "$home/state"
-  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-    "$ROOT/bin/fm-brief.sh" fixture-no-gates fixture-repo --mode no-mistakes >/dev/null 2>&1 \
-    || fail "ordinary brief failed while checking the pre-option baseline"
-  brief="$home/data/fixture-no-gates/brief.md"
-  normalized="$TMP_ROOT/no-gates-normalized.md"
-  FM_FIXTURE_HOME="$home" FM_FIXTURE_ROOT="$ROOT" perl -pe \
-    's/\Q$ENV{FM_FIXTURE_HOME}\E/<FM_HOME>/g; s/\Q$ENV{FM_FIXTURE_ROOT}\E/<FM_ROOT>/g' \
-    "$brief" > "$normalized"
-  cmp -s "$ROOT/tests/fixtures/fm-brief/no-gates.md" "$normalized" \
-    || fail "fm-brief.sh without --gates changed from the byte-exact pre-option scaffold"
-  assert_no_grep "# Acceptance gates" "$brief" \
-    "ordinary brief unexpectedly gained the opt-in acceptance-gates section"
-  pass "fm-brief.sh: omitting --gates preserves the prior scaffold byte for byte"
+  for case_spec in \
+    "fixture-no-gates|no-gates.md|--mode no-mistakes" \
+    "fixture-no-gates-scout|no-gates-scout.md|--scout"
+  do
+    id=${case_spec%%|*}
+    fixture=${case_spec#*|}; fixture=${fixture%%|*}
+    # shellcheck disable=SC2086  # the flag list is a deliberate word-split fixture argument.
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+      "$ROOT/bin/fm-brief.sh" "$id" fixture-repo ${case_spec##*|} >/dev/null 2>&1 \
+      || fail "ordinary $id brief failed while checking the pre-option baseline"
+    brief="$home/data/$id/brief.md"
+    normalized="$TMP_ROOT/$id-normalized.md"
+    FM_FIXTURE_HOME="$home" FM_FIXTURE_ROOT="$ROOT" perl -pe \
+      's/\Q$ENV{FM_FIXTURE_HOME}\E/<FM_HOME>/g; s/\Q$ENV{FM_FIXTURE_ROOT}\E/<FM_ROOT>/g' \
+      "$brief" > "$normalized"
+    cmp -s "$ROOT/tests/fixtures/fm-brief/$fixture" "$normalized" \
+      || fail "fm-brief.sh without --gates changed from the byte-exact pre-option scaffold ($fixture)"
+    assert_no_grep "# Acceptance gates" "$brief" \
+      "ordinary $id brief unexpectedly gained the opt-in acceptance-gates section"
+  done
+  pass "fm-brief.sh: omitting --gates preserves the prior ship and scout scaffolds byte for byte"
 }
 
 # --gates is one shared worker contract for ships and scouts. Herdr isolation is
@@ -226,7 +235,7 @@ test_gates_contract_and_kind_compatibility() {
     "gates section did not require automatable gates to land as tests"
   assert_grep "validation and CI run it" "$ship" \
     "gates section did not connect tests to validation and CI"
-  assert_grep "\`$ROOT/bin/fm-gates-check.sh gated-ship\`" "$ship" \
+  assert_grep "$ROOT/bin/fm-gates-check.sh" "$ship" \
     "gates section did not provide the optional progress checker"
   assert_grep "only firstmate's run counts" "$ship" \
     "gates section did not reserve the decisive checker pass for firstmate"
@@ -240,14 +249,14 @@ test_gates_contract_and_kind_compatibility() {
     "gates section allowed silent gate abandonment"
   assert_grep "# Herdr isolation - HARD SAFETY CONTRACT" "$ship" \
     "--gates displaced the Herdr lab contract"
+  assert_no_grep "For a scout, record the proposed test" "$ship" \
+    "ship gates section carried the scout-only report carve-out"
 
   FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
     "$ROOT/bin/fm-brief.sh" gated-scout fixture-repo --scout --gates >/dev/null 2>&1 \
     || fail "scout --gates scaffold failed"
   scout="$home/data/gated-scout/brief.md"
   assert_grep "# Acceptance gates" "$scout" "scout --gates brief omitted its section"
-  assert_grep "For a scout, record the proposed test in the report" "$scout" \
-    "scout gates contract did not preserve its report-only delivery path"
   assert_grep "SCOUT task" "$scout" "--gates displaced the scout contract"
 
   out=$(FM_HOME="$home" "$ROOT/bin/fm-brief.sh" gated-mate --secondmate --no-projects --gates 2>&1)
@@ -258,6 +267,87 @@ test_gates_contract_and_kind_compatibility() {
   assert_absent "$home/data/gated-mate/brief.md" \
     "rejected secondmate --gates still wrote a charter"
   pass "fm-brief.sh: --gates covers ship/scout and composes with --herdr-lab, but rejects secondmates"
+}
+
+# The gates section tells the worker where an automatable gate lands. That
+# instruction has to agree with the delivery contract the same brief prescribes
+# further down, so it is derived from kind and mode rather than fixed: a scout
+# opens no PR, and a local-only ship is explicitly told never to open one.
+test_gates_landing_instruction_matches_delivery_contract() {
+  local home brief
+  home="$TMP_ROOT/gates-mode-home"
+  mkdir -p "$home/data" "$home/state"
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" gated-local fixture-repo --gates --mode local-only >/dev/null 2>&1 \
+    || fail "local-only --gates scaffold failed"
+  brief="$home/data/gated-local/brief.md"
+  assert_grep "Do NOT push, do NOT open a PR" "$brief" \
+    "local-only brief lost its no-PR delivery contract"
+  assert_grep "committed on your \`fm/gated-local\` branch" "$brief" \
+    "local-only gates section did not point automatable gates at the branch"
+  assert_no_grep "test committed in the eventual PR" "$brief" \
+    "local-only gates section demanded a PR the same brief forbids"
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" gated-direct fixture-repo --gates --mode direct-PR >/dev/null 2>&1 \
+    || fail "direct-PR --gates scaffold failed"
+  brief="$home/data/gated-direct/brief.md"
+  assert_grep "test committed in the eventual PR" "$brief" \
+    "direct-PR gates section dropped the PR-test requirement"
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" gated-report fixture-repo --scout --gates >/dev/null 2>&1 \
+    || fail "scout --gates scaffold failed"
+  brief="$home/data/gated-report/brief.md"
+  assert_grep "in the report as a proposed test" "$brief" \
+    "scout gates section did not route automatable gates into the report"
+  assert_no_grep "test committed in the eventual PR" "$brief" \
+    "scout gates section demanded a PR the scout contract forbids"
+  pass "fm-brief.sh: the gates landing instruction follows the brief's own delivery path"
+}
+
+# Crewmate panes do not inherit firstmate's home environment (bin/fm-spawn.sh
+# injects FM_HOME only for secondmates), and fm-gates-check.sh exits 0 with
+# "no gates" when it resolves a home that has no gates.md - a silent pass the
+# worker would read as green. Run the emitted command verbatim under a hostile
+# ambient home and require it to decide the real task's gate.
+test_emitted_gates_check_command_pins_the_home() {
+  local home decoy copy brief check_cmd out status
+  home="$TMP_ROOT/gates-check-home"
+  decoy="$TMP_ROOT/gates-check-decoy"
+  copy="$TMP_ROOT/gates-check-copy"
+  mkdir -p "$home/data" "$home/state" "$decoy/data" "$decoy/state" "$copy"
+
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
+    "$ROOT/bin/fm-brief.sh" gated-check fixture-repo --gates --mode no-mistakes >/dev/null 2>&1 \
+    || fail "ship --gates scaffold failed"
+  brief="$home/data/gated-check/brief.md"
+
+  printf '%s\n' \
+    '- [ ] G1: the gate file the brief names is the one that gets checked' \
+    '  CHECK: echo pinned-to-the-right-home' \
+    '  EXPECT: never-emitted-by-that-check' \
+    '  EVIDENCE: pending' > "$home/data/gated-check/gates.md"
+  printf 'worktree=%s\n' "$copy" > "$home/state/gated-check.meta"
+
+  # shellcheck disable=SC2016  # the sed program is literal; no shell expansion is wanted.
+  check_cmd=$(sed -n 's/^You may run `\(.*\)` to gauge progress.*$/\1/p' "$brief")
+  [ -n "$check_cmd" ] || fail "gates section did not emit a runnable checker command"
+
+  out=$(cd "$decoy" && env FM_HOME="$decoy" FM_DATA_OVERRIDE= FM_STATE_OVERRIDE= \
+    bash -c "$check_cmd" 2>&1)
+  status=$?
+  case "$out" in
+    *"no gates for gated-check"*)
+      fail "the emitted checker command resolved the ambient home and reported a silent pass" ;;
+  esac
+  expect_code 1 "$status" "the emitted checker command did not fail the unmet gate ($out)"
+  assert_absent "$decoy/data/gated-check/gates-result.md" \
+    "the emitted checker command wrote its result into the ambient home"
+  [ -f "$home/data/gated-check/gates-result.md" ] \
+    || fail "the emitted checker command did not write the result into the brief's own home"
+  pass "fm-brief.sh: the emitted gates-check command carries its home and cannot pass silently"
 }
 
 # Registry with one project per delivery mode. fm-brief.sh no longer reads it -
@@ -800,6 +890,8 @@ test_no_heredoc_in_command_substitution
 test_help_includes_entire_header
 test_no_gates_output_is_byte_identical_to_baseline
 test_gates_contract_and_kind_compatibility
+test_gates_landing_instruction_matches_delivery_contract
+test_emitted_gates_check_command_pins_the_home
 test_ship_modes_generate_clean_briefs
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
