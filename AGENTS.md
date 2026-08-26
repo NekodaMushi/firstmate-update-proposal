@@ -298,7 +298,8 @@ A gate left unsatisfied, never checked, or abandoned without `--accept-abandon` 
 Only firstmate under its configured authority or the captain may waive such a gate, never the worker; record the gate, why it is invalid, obsolete, or disproportionate, who authorized it, and any replacement check or accepted residual risk, then re-run the checker against the revised contract until the recorded result passes.
 A result passes when it records `exit=0`, and the checker's header owns the exact conditions behind that code.
 The checker verifies the task's copy as it stands on disk, uncommitted changes included, rather than any particular commit.
-Firstmate's own final run is the last action before the acceptance decision, and nothing may change in the copy between that run and acceptance.
+Firstmate runs the checker itself immediately before the acceptance decision and judges only that run's own result, because `gates-result.md` carries no run identity and any process with the home can have replaced it, so a result found on disk is never acceptance evidence.
+Nothing may change in the copy between that run and acceptance.
 Write the task-specific brief under section 11 before spawning.
 
 ### Dispatch and supervision handoff
