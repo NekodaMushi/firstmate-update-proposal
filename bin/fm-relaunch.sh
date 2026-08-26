@@ -37,6 +37,15 @@
 # still monitoring green checks - because the outgoing agent may be in the
 # synchronous response flow and replacing it would duplicate pipeline ownership.
 # fm-crew-state's verdict is reported with that refusal for context.
+# A run that answered but cannot be read as finished is refused the same way and
+# names what blocked it: a status or outcome word neither vocabulary knows, a
+# `no-mistakes runs` listing that failed or timed out, or a row for this branch
+# that could not be parsed.
+# Nothing was observed about the run in those cases, so the answer is to run this
+# command again once the CLI answers cleanly, not to abort anything.
+# A CLI that cannot answer at all - absent, or silent within the bounded wait -
+# does not block the relaunch, because requiring a healthy toolchain would
+# strand exactly the wedged worker this command exists to rescue.
 # Let that response reach a terminal outcome first.
 # If the outgoing agent cannot finish the response, abort the run with the
 # supported no-mistakes command, confirm it stopped, follow branch_sync.next_action

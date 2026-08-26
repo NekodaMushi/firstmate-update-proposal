@@ -456,10 +456,13 @@ EOF
 
 # fm_composer_row_is_shell_prompt: 0 when <row> is a rendered LOGIN-SHELL prompt
 # row - what a pane draws once its agent has exited - rather than agent output.
-# This is the owner-side judgement for callers that must prove a pane is back to
-# a bare shell (bin/fm-control.sh's relaunch handoff); it reaches the glyph
-# tables above rather than respelling them, so the dead-shell rule and the
-# agent-glyph rule cannot drift apart in a caller.
+# It is the owner-side judgement for callers that need to name what a rendered
+# row is; it reaches the glyph tables above rather than respelling them, so the
+# dead-shell rule and the agent-glyph rule cannot drift apart in a caller.
+# It is deliberately NOT a readiness proof: no glyph vocabulary can decide what
+# a ready shell looks like for every operator's PS1, so bin/fm-control.sh's
+# relaunch handoff proves a bare shell from process state and records this row
+# verdict beside it as a diagnostic note only.
 # A row that STARTS with an agent prompt glyph is that agent's own composer -
 # claude's leftover `❯` is the exact stale-agent shape this must reject - and a
 # shell prompt is recognised by the glyph that terminates it.

@@ -3,7 +3,8 @@
 Firstmate talks to a running agent two ways, and they are not the same channel.
 
 The **data plane** is [`bin/fm-send.sh`](../bin/fm-send.sh): conversational text for the agent to read.
-For a `kind=secondmate` target it always prepends the from-firstmate routing marker, because a secondmate is itself a firstmate and its reply must come back through the status path rather than a chat nobody reads.
+For a `kind=secondmate` task selector it always prepends the from-firstmate routing marker, because a secondmate is itself a firstmate and its reply must come back through the status path rather than a chat nobody reads.
+The marker keys on that selector, so an endpoint addressed directly is never marked.
 
 The **control plane** is [`bin/fm-control.sh`](../bin/fm-control.sh): allowlisted lifecycle verbs addressed to an exact task id.
 
@@ -35,6 +36,7 @@ A recorded `harness=` is not always an exact adapter name: a task launched from 
 | `relaunch` | Replace the running agent with a new one in the same endpoint and worktree, on the exact recorded adapter or an explicitly chosen harness, model, and effort. | The new agent is alive on the recorded endpoint, and the durable record names the harness that is actually running. |
 
 An exit that delivers lifecycle input but cannot prove the agent stopped fails with `exit=unconfirmed`, reports the observed agent state and any interrupt cancellation claim, and never claims that nothing changed.
+The exit command is submitted through the data plane's verified transport addressed to the exact recorded endpoint rather than the task selector, so text submission keeps one owner while the lifecycle command stays unmarked.
 No submit verdict decides an exit on its own, in either direction.
 A successful exit destroys the composer the verdict is read back from, so the transport can report an unconfirmed submit for a command that in fact landed; every send result therefore falls through to the same bounded agent-state proof, and an undelivered verdict is reported as a transport failure only once that proof has also failed.
 Interrupt never rewrites busy state as proof of its own success.
@@ -128,4 +130,5 @@ The empirical basis for each adapter's value is the `harness-adapters` skill's v
 
 - `tests/fm-control.test.sh` - the adapter contract for every verified harness, the backend capability matrix, exact-id scoping, the closed verb list, the busy, idle, dead, and idempotent lifecycle cases, and marker non-regression, all against a stubbed session provider.
 - `tests/fm-control-relaunch.test.sh` - the relaunch transaction: identity preservation, harness switching, the progress note, checkpoint refusals, and rollback after a failed launch.
+- `tests/fm-relaunch.test.sh` - the bare-shell handoff against a stateful fake endpoint: the accepted subshell-deep pane, the refusal when a live harness remains anywhere under it, and the refusal when the recorded window is gone.
 - `tests/fm-control-herdr-smoke.test.sh` - the second state-verified backend against the real herdr binary, on an isolated throwaway lab session.
