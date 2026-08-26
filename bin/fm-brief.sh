@@ -6,11 +6,24 @@
 # description, acceptance criteria, and context, and may adjust other sections
 # when the task genuinely deviates (e.g. working an existing external PR instead
 # of shipping a new one).
-# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab]
-#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab]
+# Usage: fm-brief.sh <task-id> <repo-name> --mode <no-mistakes|direct-PR|local-only> [--herdr-lab] [--gates]
+#        fm-brief.sh <task-id> <repo-name> --scout [--herdr-lab] [--gates]
 #        fm-brief.sh <task-id> --secondmate {<project>...|--no-projects}
 #   --scout writes the scout contract instead: the deliverable is a report at
 #   data/<task-id>/report.md (no branch, no push, no PR) and the worktree is scratch.
+#   --gates adds the worker contract for the firstmate-owned acceptance gates at
+#   data/<task-id>/gates.md. It applies to ship and scout briefs, never secondmates.
+#   Where an automatable gate lands follows the brief's own delivery path: the PR
+#   for a no-mistakes or direct-PR ship, the task branch for local-only, the report
+#   for a scout; when firstmate's decisive run happens follows the same path, since
+#   only a no-mistakes ship has a validation phase.
+#   The emitted fm-gates-check.sh invocation carries this home's
+#   FM_HOME/FM_DATA_OVERRIDE/FM_STATE_OVERRIDE, because a crewmate pane does not
+#   inherit them and the checker exits 0 on a home holding no gates.md.
+#   The gate file must already exist: --gates refuses to scaffold without it, so
+#   a brief never calls an absent file authoritative. In a gated brief, Rule 2
+#   also names the gates-result.md the checker writes on the worker's behalf.
+#   See docs/configuration.md "Task gates" for the schema-owner reference.
 #   --secondmate writes a persistent secondmate charter. The project list
 #   is cloned into the secondmate home, while the natural-language scope
 #   tells the main firstmate when to route work there; routine churn stays in its own home;
@@ -43,6 +56,13 @@
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # --mode is refused on scout and secondmate scaffolds: a scout's deliverable is a
 # report rather than a merge, and a charter is not a delivery contract.
+# Every flag but --mode is a bare boolean: a `--flag=value` spelling, a single-dash
+# spelling, and any unrecognised option are refused rather than filed as a
+# positional, and a crewmate brief refuses a third positional the scaffold would
+# never read. So a misspelled --gates or --herdr-lab is refused rather than dropped
+# behind a success message, for any spelling that keeps a leading dash or lands
+# beyond <task-id> <repo-name>. A dash-less `gates` in the repo-name slot is the
+# one spelling that cannot be caught, since a repo name is an arbitrary word.
 # There is no --yolo flag here. The worker never owns merge decisions, so yolo is
 # a spawn-time and firstmate-side input only (AGENTS.md section 7).
 # Every scaffold's status protocol distinguishes the configured
@@ -103,6 +123,7 @@ else
 fi
 KIND=ship
 HERDR_LAB=0
+GATES=0
 NO_PROJECTS=0
 MODE=
 MODE_SET=0
@@ -124,6 +145,7 @@ for a in "$@"; do
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
     --herdr-lab) HERDR_LAB=1 ;;
+    --gates) GATES=1 ;;
     --no-projects) NO_PROJECTS=1 ;;
     --mode) want_value=mode ;;
     --mode=*) MODE=${a#--mode=}; MODE_SET=1 ;;
@@ -131,6 +153,15 @@ for a in "$@"; do
     # brief input. Refuse it loudly so it is never silently dropped here and then
     # believed to have been recorded.
     --yolo|--yolo=*) echo "error: --yolo is not a brief input; pass it to bin/fm-spawn.sh, which records the task's merge posture" >&2; exit 1 ;;
+    -h|--help) usage; exit 0 ;;
+    # Every flag above except --mode is a bare boolean, so a `--flag=value`
+    # spelling is a misspelling. Falling through to POS would file it as an
+    # unread positional and scaffold a brief that silently lacks the contract the
+    # caller asked for - the same silent-drop this parser already refuses for
+    # --yolo, and the failure the --herdr-lab declaration exists to prevent.
+    --gates=*|--scout=*|--secondmate=*|--herdr-lab=*|--no-projects=*)
+      echo "error: ${a%%=*} is a bare boolean flag and takes no value; drop the '=${a#*=}'" >&2; exit 1 ;;
+    -*) echo "error: unknown option $a (see --help)" >&2; exit 1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -154,6 +185,16 @@ elif [ "$MODE_SET" -eq 1 ]; then
   echo "error: --mode applies only to ship briefs; a scout delivers a report and a secondmate charter is not a delivery contract" >&2
   exit 1
 fi
+# POS is read back as <task-id> for every kind, plus <repo-name> for a crewmate
+# and the project list for a secondmate. A surplus crewmate positional is read by
+# nothing, so it is a misspelled flag or a stray word: refuse it here, where it is
+# provably unread, rather than scaffolding a brief that silently omits what it asked for.
+if [ "$KIND" = secondmate ]; then
+  [ "${#POS[@]}" -ge 1 ] || { echo "error: --secondmate needs a <task-id> (see --help)" >&2; exit 1; }
+else
+  [ "${#POS[@]}" -ge 2 ] || { echo "error: a $KIND brief needs <task-id> <repo-name> (see --help)" >&2; exit 1; }
+  [ "${#POS[@]}" -le 2 ] || { echo "error: unexpected extra argument '${POS[2]}'; a $KIND brief takes only <task-id> <repo-name>, and anything beyond them would be read by nothing (see --help)" >&2; exit 1; }
+fi
 ID=${POS[0]}
 
 if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
@@ -161,8 +202,23 @@ if [ "$KIND" = secondmate ] && [ "$HERDR_LAB" -eq 1 ]; then
   exit 1
 fi
 
+if [ "$KIND" = secondmate ] && [ "$GATES" -eq 1 ]; then
+  echo "error: --gates applies only to crewmate ship or scout briefs; secondmate charters cannot carry task gates" >&2
+  exit 1
+fi
+
 if [ "$NO_PROJECTS" -eq 1 ] && [ "$KIND" != secondmate ]; then
   echo "error: --no-projects applies only to --secondmate charters" >&2
+  exit 1
+fi
+
+# The brief and the gate file are two separate manual intake steps, and nothing
+# generates gates.md yet (docs/configuration.md "Task gates"). A brief that calls
+# an absent file authoritative sends the worker to a checker that prints
+# "no gates for <id>" and exits 0, which reads as green. Refuse here instead: the
+# gate file is what --gates is a contract about, so writing it first is the order.
+if [ "$GATES" -eq 1 ] && [ ! -f "$DATA/$ID/gates.md" ]; then
+  echo "error: --gates requires $DATA/$ID/gates.md to exist; firstmate writes it at intake (docs/configuration.md \"Task gates\"). Write the gate file first, then scaffold the brief." >&2
   exit 1
 fi
 
@@ -266,6 +322,58 @@ fi
 
 REPO=${POS[1]}
 
+GATES_INSERT=
+if [ "$GATES" -eq 1 ]; then
+# The worker's pane does not inherit firstmate's home environment (bin/fm-spawn.sh
+# injects FM_HOME only for secondmates), and a checker run against the wrong home
+# finds no gates.md and exits 0 - a silent pass. Pin the home on the command itself.
+GATES_CHECK_CMD="FM_HOME=$(shell_quote "$FM_HOME") FM_DATA_OVERRIDE=$(shell_quote "$DATA") FM_STATE_OVERRIDE=$(shell_quote "$STATE") $(shell_quote "$FM_ROOT/bin/fm-gates-check.sh") $(shell_quote "$ID")"
+# Both gate lines name a phase of the delivery path, so each one has to be the
+# path this same brief prescribes below. A scout opens no PR, a local-only ship
+# never pushes one, and only a no-mistakes ship has a validation phase at all.
+case "${KIND}/${MODE}" in
+  scout/*)
+    GATES_TEST_LINE="Record every gate that can be expressed as an automated test in the report as a proposed test, so it can land if the scout is promoted; write no test and open no PR here."
+    GATES_CHECK_TIMING="firstmate runs the checker before accepting your report" ;;
+  ship/local-only)
+    GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed on your \`fm/$ID\` branch, so it travels with the branch firstmate merges."
+    GATES_CHECK_TIMING="firstmate runs the checker before accepting the ready branch" ;;
+  ship/direct-PR)
+    GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so CI runs it there."
+    GATES_CHECK_TIMING="firstmate runs the checker before the merge authority decides on the PR" ;;
+  ship/no-mistakes)
+    GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so validation and CI run it."
+    GATES_CHECK_TIMING="firstmate runs the checker before starting validation" ;;
+  *)
+    echo "error: internal: no acceptance-gates wording for ${KIND}/${MODE}; every mode --mode accepts must name the phase its brief actually has" >&2
+    exit 1 ;;
+esac
+IFS= read -r -d '' GATES_SECTION <<EOF || true
+# Acceptance gates
+\`$DATA/$ID/gates.md\` is authoritative for this task.
+Read it, but do not edit it.
+Do not create or modify \`$DATA/$ID/gates-result.md\` yourself; if you run the checker below, the checker alone owns that result-file write.
+$GATES_TEST_LINE
+You may run \`$GATES_CHECK_CMD\` to gauge progress, but only firstmate's run counts.
+A \`done:\` status means only "I believe the gates pass", not "the task is finished"; $GATES_CHECK_TIMING.
+If you believe a gate is impossible, append \`blocked: gate <gate-id> impossible - <reason>\` to the status file.
+Never abandon a gate silently, and never write an abandonment into \`$DATA/$ID/gates.md\`.
+EOF
+GATES_SECTION=${GATES_SECTION%$'\n'}
+GATES_INSERT=$'\n\n'"$GATES_SECTION"
+fi
+
+# Rule 2 is stated as an absolute, but running the checker the gates section
+# invites writes gates-result.md outside the worktree. Name that write and its
+# owner in the same rule, only in the gated variant, so an un-gated brief keeps
+# its wording byte for byte.
+SHIP_RULE2="2. Stay inside this worktree; modify nothing outside it."
+SCOUT_RULE2="2. Stay inside this worktree; the only files you may write outside it are the report and the status file below."
+if [ "$GATES" -eq 1 ]; then
+  SHIP_RULE2="2. Stay inside this worktree; the only files written outside it are the status file below and \`$DATA/$ID/gates-result.md\`, which the acceptance-gates checker writes when you run it - that file is the checker's to write and firstmate's to judge, never yours to edit."
+  SCOUT_RULE2="2. Stay inside this worktree; the only files you may write outside it are the report and the status file below. Running the acceptance-gates checker also writes \`$DATA/$ID/gates-result.md\`, but that write is the checker's and firstmate's to judge, never yours to edit."
+fi
+
 if [ "$HERDR_LAB" -eq 1 ]; then
 HERDR_LAB_HELPER=$(shell_quote "$FM_ROOT/bin/fm-herdr-lab.sh")
 # shellcheck disable=SC2016  # single quotes are deliberate: these lines are literal brief text whose backtick-wrapped $(...) and "$HERDR_LAB_SESSION" snippets must reach the reading agent verbatim, not expand at scaffold time; only the '"$VAR"' break-outs interpolate.
@@ -303,7 +411,7 @@ cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 # Task
-{TASK}
+{TASK}$GATES_INSERT
 
 $HERDR_SECTION
 
@@ -315,7 +423,7 @@ The report is the only thing that survives, so anything worth keeping must be in
 
 # Rules
 1. Never push to any remote and never open a PR.
-2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
+$SCOUT_RULE2
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
@@ -414,7 +522,7 @@ cat > "$BRIEF" <<EOF
 You are a crewmate: an autonomous worker agent managed by firstmate. Work on your own; do not wait for a human.
 
 # Task
-{TASK}
+{TASK}$GATES_INSERT
 
 $HERDR_SECTION
 
@@ -429,7 +537,7 @@ If the top-level path is the primary checkout or not the worktree you were launc
 
 # Rules
 $RULE1
-2. Stay inside this worktree; modify nothing outside it.
+$SHIP_RULE2
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
