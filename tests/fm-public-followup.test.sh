@@ -108,8 +108,8 @@ tasks_in() {  # <home> <tasks-axi args...>
 
 future_rfc3339() {  # <days>
   local days=$1
-  date -u -d "+$days days" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
-    || date -u -v+"${days}"d '+%Y-%m-%dT%H:%M:%SZ'
+  date -u -v+"${days}"d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+    || date -u -d "+$days days" '+%Y-%m-%dT%H:%M:%SZ'
 }
 
 rfc3339_to_epoch() {  # <timestamp>

@@ -55,20 +55,34 @@ assert_block_equals() {
   fi
 }
 
+# BSD/macOS date takes -v first; GNU date rejects it and takes -d. Probing in
+# that order is unambiguous on both, because BSD date accepts -d as a valid
+# (unrelated) option and would silently print the current time.
+future_rfc3339() {  # <days>
+  local days=$1
+  date -u -v+"${days}"d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+    || date -u -d "+$days days" '+%Y-%m-%dT%H:%M:%SZ'
+}
+
 # seed_public_commitment <home> <obligation> <work-home> <work-id>: the intake
 # half of a promised public reply - the typed obligation, its bound work, and
 # this home's registration - so a later handoff can be observed against a real
 # unresolved commitment rather than a stub.
 seed_public_commitment() {
   local home=$1 obligation=$2 work_home=$3 work_id=$4
+  local received_at followup_expires_at obligation_expires_at
+  received_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ') || fail "could not compute the receipt time"
+  followup_expires_at=$(future_rfc3339 7) || fail "could not compute the thread expiry"
+  obligation_expires_at=$(future_rfc3339 30) || fail "could not compute the obligation expiry"
   printf 'FMX_PAIRING_TOKEN=test-token\n' > "$home/.env"
   cp "$ROOT/.tasks.toml" "$home/.tasks.toml"
-  jq -n '{request_id:"req-handoff", platform:"x",
-          context_binding:{version:"ctx1", value:"ctx1_req-handoff"},
-          public_safe_summary:"looking into the sign-in redirect",
-          received_at:"2026-07-30T10:00:00Z",
-          followup_expires_at:"2026-08-06T10:00:00Z",
-          reservation_expires_at:"2026-08-06T10:00:00Z"}' > "$home/request.json"
+  jq -n --arg received "$received_at" --arg expires "$followup_expires_at" \
+    '{request_id:"req-handoff", platform:"x",
+      context_binding:{version:"ctx1", value:"ctx1_req-handoff"},
+      public_safe_summary:"looking into the sign-in redirect",
+      received_at:$received,
+      followup_expires_at:$expires,
+      reservation_expires_at:$expires}' > "$home/request.json"
   jq -n '{type:"pr-merged", project:"alpha",
           required_deliverables:["pr_url"], completion_policy:"all-required"}' \
     > "$home/expected.json"
@@ -77,7 +91,7 @@ seed_public_commitment() {
       role:"fulfills", required:true, generation:1}' > "$home/relation.json"
   (cd "$home" && tasks-axi public-followup add "$obligation" \
     --request-context-file "$home/request.json" --purpose promised-final \
-    --expected-final-file "$home/expected.json" --expires-at 2026-10-01T00:00:00Z) >/dev/null \
+    --expected-final-file "$home/expected.json" --expires-at "$obligation_expires_at") >/dev/null \
     || fail "could not create the public commitment"
   (cd "$home" && tasks-axi public-followup bind-work "$obligation" \
     --relation-file "$home/relation.json") >/dev/null \
