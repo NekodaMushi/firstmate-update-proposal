@@ -30,7 +30,7 @@ Firstmate owns the lifecycle of these two files.
 At intake, firstmate writes `data/<id>/gates.md` by hand before the brief, and an existing gate file requires scaffolding that ship or scout brief with `bin/fm-brief.sh --gates`; a secondmate charter carries no gates and the flag is refused there.
 `bin/fm-brief.sh`'s header owns that flag and the worker-side contract it emits, and `--gates` refuses to scaffold while `data/<id>/gates.md` is absent, so no brief declares an absent gate file authoritative.
 Workers read `gates.md` but never write it.
-A worker may run the checker to gauge its own progress, and every run replaces `gates-result.md` and keeps no earlier one; the file carries no run identity, so any process with this home can have written the copy on disk.
+A worker may run the checker to gauge its own progress, and every run that reaches a verdict replaces `gates-result.md` and keeps no earlier one; the file carries no run identity, so any process with this home can have written the copy on disk.
 `AGENTS.md` owns the acceptance rule that follows from that, including when firstmate must run the checker itself.
 Within `data/<id>/` the checker reads only `gates.md`, so a superseded contract or result archived elsewhere in that directory, as a promoted scout's history under `archive/scout/` is, stays inert.
 `gates.md` contains gate declarations with expected outcomes, `CHECK`, `EXPECT`, and `EVIDENCE` fields, and optional `ABANDON` entries; `bin/fm-gates-check.sh`'s header is the single owner of their exact grammar and verdict semantics.

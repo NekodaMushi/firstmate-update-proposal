@@ -168,6 +168,15 @@
 # result file. The ordinary mode omits these guards and keeps its existing output,
 # so workers can gauge gates against in-progress or uncommitted changes.
 #
+# The post-check anchor holds a decisive run to the same cleanliness as the
+# pre-check one, so a CHECK written for a gate that will be judged decisively
+# either cleans up what it creates or leaves it on a path the copy already
+# ignores through .gitignore or another explicit ignore rule; the checker reads
+# ignored paths as clean. An unspecified leftover, a build tree or a scratch log
+# among them, refuses the run rather than passing quietly, because a copy the
+# CHECKs changed is no longer the delivered commit the verdict claims to
+# describe.
+#
 # --head comes from the delivery record, never from the copy under check: the PR
 # head sha for a no-mistakes or direct-PR ship, and the tip of the fm/<id> branch
 # firstmate is about to merge for a local-only ship. A commit the copy resolves
@@ -189,9 +198,10 @@
 #     a line that does not match the format, in which case no CHECK ran at all.
 #   2 usage error, a task id that is not a plain name, an unreadable meta or
 #     copy, no worktree= in the meta, or an invalid decisive-mode option pair.
-#   3 --for-acceptance refused because the task copy was dirty, its commit did
-#     not match --head, either fact could not be read reliably, the task declares
-#     no gates.md, or the task is a scout.
+#   3 --for-acceptance refused because --head named no commit the task copy has
+#     or an abbreviation it cannot resolve unambiguously, the task copy was
+#     dirty, its commit did not match --head, either fact could not be read
+#     reliably, the task declares no gates.md, or the task is a scout.
 # An ordinary run of a task with no data/<id>/gates.md prints "no gates for <id>"
 # and exits 0 without writing gates-result.md: nothing was declared, so nothing is
 # owed. A decisive run refuses that task instead, because an absent contract is

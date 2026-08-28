@@ -116,4 +116,25 @@ assert_contains "$out" "acceptance run refused: task copy $REPO2 is dirty after 
   || fail "post-check refusal replaced the prior result file"
 pass "fm-gates-check.sh: a check that dirties the copy is refused after the checks"
 
+REPO3="$TMP_ROOT/repo3"
+mkdir -p "$HOME_DIR/data/t3" "$REPO3"
+git -C "$REPO3" init -q
+echo hello > "$REPO3/README.md"
+printf 'generated/\n' > "$REPO3/.gitignore"
+git -C "$REPO3" -c user.name=t -c user.email=t@t add -A
+git -C "$REPO3" -c user.name=t -c user.email=t@t commit -qm delivered
+DELIVERED_HEAD3=$(git -C "$REPO3" rev-parse HEAD)
+printf 'worktree=%s\n' "$REPO3" > "$HOME_DIR/state/t3.meta"
+cat > "$HOME_DIR/data/t3/gates.md" <<'GATES_EOF'
+- [ ] G1: the check writes only into an ignored path
+  CHECK: mkdir -p generated && touch generated/out.txt && echo ok
+  EXPECT: ok
+  EVIDENCE: pending
+GATES_EOF
+out=$(run t3 --for-acceptance --head "$DELIVERED_HEAD3" 2>&1); rc=$?
+expect_code 0 "$rc" "a check writing only into an ignored path should still reach a verdict ($out)"
+assert_contains "$out" "acceptance summary: head=$DELIVERED_HEAD3 satisfied=1" \
+  "decisive run treated an ignored generated path as a dirty copy"
+pass "fm-gates-check.sh: a check that writes only into an ignored path keeps its verdict"
+
 echo "all fm-gates-check decisive tests passed"
