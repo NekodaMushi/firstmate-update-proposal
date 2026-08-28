@@ -1,0 +1,23 @@
+== tests/fm-public-followup.test.sh ==
+   | future_rfc3339() {  # <days>
+   |   local days=$1
+   |   date -u -v+"${days}"d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+   |     || date -u -d "+$days days" '+%Y-%m-%dT%H:%M:%SZ'
+   | }
+GNU date (this Linux host, real date)          -> 2026-09-04T19:43:34Z  (now + 7 days)
+BSD/macOS date (emulated: -d means DST)        -> 2026-09-04T19:43:34Z  (now + 7 days)
+
+== tests/fm-backlog-handoff.test.sh ==
+   | future_rfc3339() {  # <days>
+   |   local days=$1
+   |   date -u -v+"${days}"d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+   |     || date -u -d "+$days days" '+%Y-%m-%dT%H:%M:%SZ'
+   | }
+GNU date (this Linux host, real date)          -> 2026-09-04T19:43:34Z  (now + 7 days)
+BSD/macOS date (emulated: -d means DST)        -> 2026-09-04T19:43:34Z  (now + 7 days)
+
+== counter-proof: the GNU-first probe order the review rejected ==
+GNU-first order on BSD/macOS                   -> 2026-08-28T19:43:34Z  (now + 0 days)
+   ^ collapses to NOW on macOS; --expires-at <now> is then rejected as past.
+
+RESULT: shipped BSD-first probe yields a real future fixture on both dialects.
