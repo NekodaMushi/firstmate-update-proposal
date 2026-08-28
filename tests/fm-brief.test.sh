@@ -263,12 +263,12 @@ test_gates_contract_and_kind_compatibility() {
     "gates section did not connect tests to validation and CI"
   assert_grep "$ROOT/bin/fm-gates-check.sh" "$ship" \
     "gates section did not provide the optional progress checker"
-  assert_grep "only firstmate's run counts" "$ship" \
+  assert_grep "only firstmate's decisive run counts" "$ship" \
     "gates section did not reserve the decisive checker pass for firstmate"
   assert_grep "A \`done:\` status means only \"I believe the gates pass\"" "$ship" \
     "gates section overstated the worker's done status"
-  assert_grep "firstmate runs the checker before starting validation" "$ship" \
-    "gates section omitted the pre-validation firstmate check"
+  assert_grep "checker's decisive mode for acceptance" "$ship" \
+    "gates section did not distinguish firstmate's acceptance run from worker gauge runs"
   assert_grep "the checker's to write and firstmate's to judge" "$ship" \
     "gated ship Rule 2 did not account for the write the checker invitation implies"
   assert_grep "blocked: gate <gate-id> impossible - <reason>" "$ship" \
@@ -285,10 +285,10 @@ test_gates_contract_and_kind_compatibility() {
   scout="$home/data/gated-scout/brief.md"
   assert_grep "# Acceptance gates" "$scout" "scout --gates brief omitted its section"
   assert_grep "SCOUT task" "$scout" "--gates displaced the scout contract"
-  assert_grep "firstmate runs the checker before accepting your report" "$scout" \
-    "scout gates section named a validation phase a scout brief does not have"
-  assert_no_grep "before starting validation" "$scout" \
-    "scout gates section kept the ship-only validation phase"
+  assert_grep "checker's decisive mode for acceptance" "$scout" \
+    "scout gates section did not distinguish firstmate's acceptance run from worker gauge runs"
+  assert_no_grep "firstmate runs the checker before" "$scout" \
+    "scout gates section still promised per-mode decisive-run timing"
   assert_grep "that write is the checker's and firstmate's to judge" "$scout" \
     "gated scout Rule 2 did not account for the checker's result write"
 
@@ -323,10 +323,10 @@ test_gates_landing_instruction_matches_delivery_contract() {
     "local-only gates section did not point automatable gates at the branch"
   assert_no_grep "test committed in the eventual PR" "$brief" \
     "local-only gates section demanded a PR the same brief forbids"
-  assert_grep "firstmate runs the checker before accepting the ready branch" "$brief" \
-    "local-only gates section did not tie the decisive check to the ready branch"
-  assert_no_grep "before starting validation" "$brief" \
-    "local-only gates section named a validation phase the same brief forbids"
+  assert_grep "checker's decisive mode for acceptance" "$brief" \
+    "local-only gates section omitted the generic acceptance-run contract"
+  assert_no_grep "firstmate runs the checker before" "$brief" \
+    "local-only gates section still promised per-mode decisive-run timing"
 
   run_brief "$home" gated-direct fixture-repo --gates --mode direct-PR >/dev/null 2>&1 \
     || fail "direct-PR --gates scaffold failed"
@@ -335,10 +335,10 @@ test_gates_landing_instruction_matches_delivery_contract() {
     "direct-PR gates section dropped the PR-test requirement"
   assert_grep "Do NOT run /no-mistakes" "$brief" \
     "direct-PR brief lost its no-pipeline delivery contract"
-  assert_grep "firstmate runs the checker before the merge authority decides on the PR" "$brief" \
-    "direct-PR gates section did not tie the decisive check to the merge decision"
-  assert_no_grep "before starting validation" "$brief" \
-    "direct-PR gates section named a validation phase the same brief forbids"
+  assert_grep "checker's decisive mode for acceptance" "$brief" \
+    "direct-PR gates section omitted the generic acceptance-run contract"
+  assert_no_grep "firstmate runs the checker before" "$brief" \
+    "direct-PR gates section still promised per-mode decisive-run timing"
 
   run_brief "$home" gated-report fixture-repo --scout --gates >/dev/null 2>&1 \
     || fail "scout --gates scaffold failed"
@@ -351,11 +351,11 @@ test_gates_landing_instruction_matches_delivery_contract() {
 }
 
 # The gates wording and the closed set --mode validates are two lists in one
-# script, and nothing tied them together: a fourth mode would have silently
-# inherited the no-mistakes phrasing. Read the accepted set from the script's own
-# refusal so the list under test is the executable's, not a copy, and require each
-# accepted mode to produce gates wording its own delivery contract can support.
-test_every_accepted_mode_has_gates_wording_for_its_own_phase() {
+# script, and nothing ties a future mode to a suitable landing instruction.
+# Read the accepted set from the script's own refusal so the list under test is
+# the executable's, not a copy, and require each accepted mode to place tests on
+# a delivery surface its own contract supports without promising acceptance timing.
+test_every_accepted_mode_has_gates_wording_for_its_delivery_surface() {
   local home modes mode brief out
   home="$TMP_ROOT/gates-mode-coverage-home"
   mkdir -p "$home/data" "$home/state"
@@ -369,11 +369,11 @@ test_every_accepted_mode_has_gates_wording_for_its_own_phase() {
     run_brief "$home" "mode-$mode" fixture-repo --gates --mode "$mode" >/dev/null 2>&1 \
       || fail "--gates refused the accepted mode $mode, so it has no acceptance-gates wording"
     brief="$home/data/mode-$mode/brief.md"
-    assert_grep "firstmate runs the checker before" "$brief" \
-      "the $mode gates section did not say when firstmate's decisive run happens"
+    assert_grep "checker's decisive mode for acceptance" "$brief" \
+      "the $mode gates section omitted the generic acceptance-run contract"
+    assert_no_grep "firstmate runs the checker before" "$brief" \
+      "the $mode gates section still promised per-mode decisive-run timing"
     if grep -q "no remote, no PR, no pipeline" "$brief" || grep -q "Do NOT run /no-mistakes" "$brief"; then
-      assert_no_grep "before starting validation" "$brief" \
-        "the $mode gates section named a validation phase the same brief forbids"
       assert_no_grep "so validation and CI run it" "$brief" \
         "the $mode gates section sent its test to a validation phase the same brief forbids"
     fi
@@ -1073,7 +1073,7 @@ test_help_includes_entire_header
 test_no_gates_output_is_byte_identical_to_baseline
 test_gates_contract_and_kind_compatibility
 test_gates_landing_instruction_matches_delivery_contract
-test_every_accepted_mode_has_gates_wording_for_its_own_phase
+test_every_accepted_mode_has_gates_wording_for_its_delivery_surface
 test_emitted_gates_check_command_pins_the_home
 test_boolean_flags_reject_a_value_instead_of_dropping_it
 test_gates_requires_the_gate_file_to_exist

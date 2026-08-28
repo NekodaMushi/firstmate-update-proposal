@@ -14,9 +14,8 @@
 #   --gates adds the worker contract for the firstmate-owned acceptance gates at
 #   data/<task-id>/gates.md. It applies to ship and scout briefs, never secondmates.
 #   Where an automatable gate lands follows the brief's own delivery path: the PR
-#   for a no-mistakes or direct-PR ship, the task branch for local-only, the report
-#   for a scout; when firstmate's decisive run happens follows the same path, since
-#   only a no-mistakes ship has a validation phase.
+#   for a no-mistakes or direct-PR ship, the task branch for local-only, and the
+#   report for a scout. The checker header owns firstmate's decisive-run mechanics.
 #   The emitted fm-gates-check.sh invocation carries this home's
 #   FM_HOME/FM_DATA_OVERRIDE/FM_STATE_OVERRIDE, because a crewmate pane does not
 #   inherit them and the checker exits 0 on a home holding no gates.md.
@@ -91,9 +90,9 @@ case "${1:-}" in
   -h|--help) usage; exit 0 ;;
 esac
 
-# shellcheck source=bin/fm-marker-lib.sh
+# shellcheck source=bin/fm-marker-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-marker-lib.sh"
-# shellcheck source=bin/fm-classify-lib.sh
+# shellcheck source=bin/fm-classify-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-classify-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 
@@ -328,24 +327,19 @@ if [ "$GATES" -eq 1 ]; then
 # injects FM_HOME only for secondmates), and a checker run against the wrong home
 # finds no gates.md and exits 0 - a silent pass. Pin the home on the command itself.
 GATES_CHECK_CMD="FM_HOME=$(shell_quote "$FM_HOME") FM_DATA_OVERRIDE=$(shell_quote "$DATA") FM_STATE_OVERRIDE=$(shell_quote "$STATE") $(shell_quote "$FM_ROOT/bin/fm-gates-check.sh") $(shell_quote "$ID")"
-# Both gate lines name a phase of the delivery path, so each one has to be the
-# path this same brief prescribes below. A scout opens no PR, a local-only ship
-# never pushes one, and only a no-mistakes ship has a validation phase at all.
+# The test lands on the delivery path this same brief prescribes below. A scout
+# opens no PR, while a local-only ship never pushes one.
 case "${KIND}/${MODE}" in
   scout/*)
-    GATES_TEST_LINE="Record every gate that can be expressed as an automated test in the report as a proposed test, so it can land if the scout is promoted; write no test and open no PR here."
-    GATES_CHECK_TIMING="firstmate runs the checker before accepting your report" ;;
+    GATES_TEST_LINE="Record every gate that can be expressed as an automated test in the report as a proposed test, so it can land if the scout is promoted; write no test and open no PR here." ;;
   ship/local-only)
-    GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed on your \`fm/$ID\` branch, so it travels with the branch firstmate merges."
-    GATES_CHECK_TIMING="firstmate runs the checker before accepting the ready branch" ;;
+    GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed on your \`fm/$ID\` branch, so it travels with the branch firstmate merges." ;;
   ship/direct-PR)
-    GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so CI runs it there."
-    GATES_CHECK_TIMING="firstmate runs the checker before the merge authority decides on the PR" ;;
+    GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so CI runs it there." ;;
   ship/no-mistakes)
-    GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so validation and CI run it."
-    GATES_CHECK_TIMING="firstmate runs the checker before starting validation" ;;
+    GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so validation and CI run it." ;;
   *)
-    echo "error: internal: no acceptance-gates wording for ${KIND}/${MODE}; every mode --mode accepts must name the phase its brief actually has" >&2
+    echo "error: internal: no acceptance-gates wording for ${KIND}/${MODE}; every mode --mode accepts must name where its automatable gates land" >&2
     exit 1 ;;
 esac
 IFS= read -r -d '' GATES_SECTION <<EOF || true
@@ -354,8 +348,8 @@ IFS= read -r -d '' GATES_SECTION <<EOF || true
 Read it, but do not edit it.
 Do not create or modify \`$DATA/$ID/gates-result.md\` yourself; if you run the checker below, the checker alone owns that result-file write.
 $GATES_TEST_LINE
-You may run \`$GATES_CHECK_CMD\` to gauge progress, but only firstmate's run counts.
-A \`done:\` status means only "I believe the gates pass", not "the task is finished"; $GATES_CHECK_TIMING.
+You may run \`$GATES_CHECK_CMD\` to gauge progress, but only firstmate's decisive run counts.
+A \`done:\` status means only "I believe the gates pass", not "the task is finished"; firstmate separately runs the checker's decisive mode for acceptance.
 If you believe a gate is impossible, append \`blocked: gate <gate-id> impossible - <reason>\` to the status file.
 Never abandon a gate silently, and never write an abandonment into \`$DATA/$ID/gates.md\`.
 EOF
