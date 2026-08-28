@@ -106,6 +106,8 @@ tasks_in() {  # <home> <tasks-axi args...>
   (cd "$home" && tasks-axi "$@")
 }
 
+# The BSD-first probe order below is required for correctness; the reason is on
+# `future_rfc3339` in tests/fm-backlog-handoff.test.sh.
 future_rfc3339() {  # <days>
   local days=$1
   date -u -v+"${days}"d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
