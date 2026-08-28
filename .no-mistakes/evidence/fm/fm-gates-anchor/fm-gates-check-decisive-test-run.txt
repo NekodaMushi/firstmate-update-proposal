@@ -1,0 +1,10 @@
+ok - fm-gates-check.sh: a clean copy at the delivered HEAD passes with an inline verdict
+ok - fm-gates-check.sh: ordinary gauge runs still allow an in-progress dirty copy
+ok - fm-gates-check.sh: a dirty copy is refused before any decisive check
+ok - fm-gates-check.sh: a copy at a different HEAD than the delivered commit is refused
+ok - fm-gates-check.sh: a revision the copy resolves for itself is refused as --head
+ok - fm-gates-check.sh: a decisive run refuses a task that declares no gates
+ok - fm-gates-check.sh: a scout is refused a decisive run and keeps the ordinary one
+ok - fm-gates-check.sh: a check that dirties the copy is refused after the checks
+ok - fm-gates-check.sh: a check that writes only into an ignored path keeps its verdict
+all fm-gates-check decisive tests passed

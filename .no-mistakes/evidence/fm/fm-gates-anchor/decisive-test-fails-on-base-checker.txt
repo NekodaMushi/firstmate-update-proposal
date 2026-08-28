@@ -1,0 +1,2 @@
+=== tests/fm-gates-check-decisive.test.sh against the BASE checker (634decc) ===
+not ok - clean delivered HEAD should pass the decisive run (): expected exit 0, got 2

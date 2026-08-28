@@ -1,0 +1,12 @@
+Scenario: a later change touches only bin/fm-gates-check.sh (mapped to family pure-contract-unit).
+$ git status --porcelain
+ M bin/fm-gates-check.sh
+?? bin/fm-gotmp-base-runner.sh
+(bin/fm-gotmp-base-runner.sh is the base-commit copy of the runner, used only to show the old selection; it is removed afterwards.)
+
+=== change-based selection with the runner as of base 634decc ===
+tests/fm-gates-check.test.sh
+
+=== change-based selection with the runner on this branch ===
+tests/fm-gates-check-decisive.test.sh
+tests/fm-gates-check.test.sh

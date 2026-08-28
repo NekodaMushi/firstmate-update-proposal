@@ -1,0 +1,48 @@
+
+=== no-mistakes brief: the Acceptance gates section the worker reads ===
+# Acceptance gates
+`<FM_HOME>/data/t-no-mistakes/gates.md` is authoritative for this task.
+Read it, but do not edit it.
+Do not create or modify `<FM_HOME>/data/t-no-mistakes/gates-result.md` yourself; if you run the checker below, the checker alone owns that result-file write.
+Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so validation and CI run it.
+You may run `FM_HOME='<FM_HOME>' FM_DATA_OVERRIDE='<FM_HOME>/data' FM_STATE_OVERRIDE='<FM_HOME>/state' '<FM_ROOT>/bin/fm-gates-check.sh' 't-no-mistakes'` to gauge progress, but only firstmate's decisive run counts.
+A `done:` status means only "I believe the gates pass", not "the task is finished"; firstmate separately runs the checker's decisive mode for acceptance, anchored to the commit you deliver.
+If you believe a gate is impossible, append `blocked: gate <gate-id> impossible - <reason>` to the status file.
+Never abandon a gate silently, and never write an abandonment into `<FM_HOME>/data/t-no-mistakes/gates.md`.
+
+
+=== direct-PR brief: the Acceptance gates section the worker reads ===
+# Acceptance gates
+`<FM_HOME>/data/t-direct-PR/gates.md` is authoritative for this task.
+Read it, but do not edit it.
+Do not create or modify `<FM_HOME>/data/t-direct-PR/gates-result.md` yourself; if you run the checker below, the checker alone owns that result-file write.
+Turn every gate that can be expressed as an automated test into a test committed in the eventual PR, so CI runs it there.
+You may run `FM_HOME='<FM_HOME>' FM_DATA_OVERRIDE='<FM_HOME>/data' FM_STATE_OVERRIDE='<FM_HOME>/state' '<FM_ROOT>/bin/fm-gates-check.sh' 't-direct-PR'` to gauge progress, but only firstmate's decisive run counts.
+A `done:` status means only "I believe the gates pass", not "the task is finished"; firstmate separately runs the checker's decisive mode for acceptance, anchored to the commit you deliver.
+If you believe a gate is impossible, append `blocked: gate <gate-id> impossible - <reason>` to the status file.
+Never abandon a gate silently, and never write an abandonment into `<FM_HOME>/data/t-direct-PR/gates.md`.
+
+
+=== local-only brief: the Acceptance gates section the worker reads ===
+# Acceptance gates
+`<FM_HOME>/data/t-local-only/gates.md` is authoritative for this task.
+Read it, but do not edit it.
+Do not create or modify `<FM_HOME>/data/t-local-only/gates-result.md` yourself; if you run the checker below, the checker alone owns that result-file write.
+Turn every gate that can be expressed as an automated test into a test committed on your `fm/t-local-only` branch, so it travels with the branch firstmate merges.
+You may run `FM_HOME='<FM_HOME>' FM_DATA_OVERRIDE='<FM_HOME>/data' FM_STATE_OVERRIDE='<FM_HOME>/state' '<FM_ROOT>/bin/fm-gates-check.sh' 't-local-only'` to gauge progress, but only firstmate's decisive run counts.
+A `done:` status means only "I believe the gates pass", not "the task is finished"; firstmate separately runs the checker's decisive mode for acceptance, anchored to the commit you deliver.
+If you believe a gate is impossible, append `blocked: gate <gate-id> impossible - <reason>` to the status file.
+Never abandon a gate silently, and never write an abandonment into `<FM_HOME>/data/t-local-only/gates.md`.
+
+
+=== scout brief: the Acceptance gates section the worker reads ===
+# Acceptance gates
+`<FM_HOME>/data/t-scout/gates.md` is authoritative for this task.
+Read it, but do not edit it.
+Do not create or modify `<FM_HOME>/data/t-scout/gates-result.md` yourself; if you run the checker below, the checker alone owns that result-file write.
+Record every gate that can be expressed as an automated test in the report as a proposed test, so it can land if the scout is promoted; write no test and open no PR here.
+You may run `FM_HOME='<FM_HOME>' FM_DATA_OVERRIDE='<FM_HOME>/data' FM_STATE_OVERRIDE='<FM_HOME>/state' '<FM_ROOT>/bin/fm-gates-check.sh' 't-scout'` to gauge progress, but only firstmate's own run counts.
+A `done:` status means only "I believe the gates pass", not "the task is finished"; firstmate separately runs the checker itself before accepting your report, as an ordinary run: a scout delivers a report rather than a commit, so the checker's decisive mode does not apply here.
+If you believe a gate is impossible, append `blocked: gate <gate-id> impossible - <reason>` to the status file.
+Never abandon a gate silently, and never write an abandonment into `<FM_HOME>/data/t-scout/gates.md`.
+

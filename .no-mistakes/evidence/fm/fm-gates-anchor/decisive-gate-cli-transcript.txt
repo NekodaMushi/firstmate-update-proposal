@@ -1,0 +1,56 @@
+
+=== 1. Worker edits the copy but has not committed; gauges its own progress ===
+
+$ git -C /tmp/fm-decisive-demo.7awx3g/task-copy status --porcelain
+ M greet.sh
+[exit 0]
+
+$ FM_HOME=/tmp/fm-decisive-demo.7awx3g/firstmate-home /home/fabien/.no-mistakes/worktrees/c7c4d0d40ca0/01M153TE1QRJYHCX6H76VRZJWS/bin/fm-gates-check.sh t-42
+G1: satisfied - output contained EXPECT 'hello crew' (exit 0)
+summary: satisfied=1 unsatisfied=0 abandoned=0 accepted=0 abandon_unknown=0 unparseable=0 parse_errors=0 -> /tmp/fm-decisive-demo.7awx3g/firstmate-home/data/t-42/gates-result.md
+[exit 0]
+
+=== 2. Worker says done; firstmate runs the decisive mode on the uncommitted copy ===
+
+$ FM_HOME=/tmp/fm-decisive-demo.7awx3g/firstmate-home /home/fabien/.no-mistakes/worktrees/c7c4d0d40ca0/01M153TE1QRJYHCX6H76VRZJWS/bin/fm-gates-check.sh t-42 --for-acceptance --head a5366669a7b00de80fa66a5edfab1ca5c2ede81b
+acceptance run refused: task copy /tmp/fm-decisive-demo.7awx3g/task-copy is dirty before checks: [ M greet.sh]
+[exit 3]
+
+$ tail -3 /tmp/fm-decisive-demo.7awx3g/firstmate-home/data/t-42/gates-result.md
+
+## Summary
+satisfied=1 unsatisfied=0 abandoned=0 accepted=0 abandon_unknown=0 unparseable=0 parse_errors=0 exit=0
+[exit 0]
+
+=== 3. Worker commits and delivers that commit; firstmate anchors to it ===
+delivered head from the delivery record: 83c7b5387d938787db1259e5cb61ee9d5bc1c4d2
+
+$ FM_HOME=/tmp/fm-decisive-demo.7awx3g/firstmate-home /home/fabien/.no-mistakes/worktrees/c7c4d0d40ca0/01M153TE1QRJYHCX6H76VRZJWS/bin/fm-gates-check.sh t-42 --for-acceptance --head 83c7b5387d938787db1259e5cb61ee9d5bc1c4d2
+G1: satisfied - output contained EXPECT 'hello crew' (exit 0)
+acceptance summary: head=83c7b5387d938787db1259e5cb61ee9d5bc1c4d2 satisfied=1 unsatisfied=0 abandoned=0 accepted=0 abandon_unknown=0 unparseable=0 parse_errors=0 exit=0 -> /tmp/fm-decisive-demo.7awx3g/firstmate-home/data/t-42/gates-result.md
+[exit 0]
+
+=== 4. The copy moved on after delivery (a stray follow-up commit) ===
+
+$ FM_HOME=/tmp/fm-decisive-demo.7awx3g/firstmate-home /home/fabien/.no-mistakes/worktrees/c7c4d0d40ca0/01M153TE1QRJYHCX6H76VRZJWS/bin/fm-gates-check.sh t-42 --for-acceptance --head 83c7b5387d938787db1259e5cb61ee9d5bc1c4d2
+acceptance run refused: task copy HEAD 8f37f6e1e2722276030b823e0ad1c506801e975b does not match delivered head 83c7b5387d938787db1259e5cb61ee9d5bc1c4d2 before checks
+[exit 3]
+
+=== 5. A head the copy would resolve for itself is not a delivery record ===
+
+$ FM_HOME=/tmp/fm-decisive-demo.7awx3g/firstmate-home /home/fabien/.no-mistakes/worktrees/c7c4d0d40ca0/01M153TE1QRJYHCX6H76VRZJWS/bin/fm-gates-check.sh t-42 --for-acceptance --head HEAD
+error: --head must be a commit object name taken from the delivery record, not a revision the task copy resolves for itself, got 'HEAD'
+[exit 2]
+
+=== 6. A failing gate still reaches a verdict, and it is on stdout ===
+
+$ FM_HOME=/tmp/fm-decisive-demo.7awx3g/firstmate-home /home/fabien/.no-mistakes/worktrees/c7c4d0d40ca0/01M153TE1QRJYHCX6H76VRZJWS/bin/fm-gates-check.sh t-42 --for-acceptance --head 3c020a2aedebac45b4ba0bf8a4c2cb2060347442
+G1: unsatisfied - output lacked EXPECT 'hello crew' (exit 0)
+acceptance summary: head=3c020a2aedebac45b4ba0bf8a4c2cb2060347442 satisfied=0 unsatisfied=1 abandoned=0 accepted=0 abandon_unknown=0 unparseable=0 parse_errors=0 exit=1 -> /tmp/fm-decisive-demo.7awx3g/firstmate-home/data/t-42/gates-result.md
+[exit 1]
+
+=== 7. A scout has no delivered commit, so it keeps the ordinary run ===
+
+$ FM_HOME=/tmp/fm-decisive-demo.7awx3g/firstmate-home /home/fabien/.no-mistakes/worktrees/c7c4d0d40ca0/01M153TE1QRJYHCX6H76VRZJWS/bin/fm-gates-check.sh t-scout --for-acceptance --head 3c020a2aedebac45b4ba0bf8a4c2cb2060347442
+acceptance run refused: task t-scout is a scout (kind=scout in /tmp/fm-decisive-demo.7awx3g/firstmate-home/state/t-scout.meta); a scout delivers a report rather than a commit, so accept it on an ordinary run
+[exit 3]
