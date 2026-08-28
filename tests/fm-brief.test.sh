@@ -285,8 +285,10 @@ test_gates_contract_and_kind_compatibility() {
   scout="$home/data/gated-scout/brief.md"
   assert_grep "# Acceptance gates" "$scout" "scout --gates brief omitted its section"
   assert_grep "SCOUT task" "$scout" "--gates displaced the scout contract"
-  assert_grep "checker's decisive mode for acceptance" "$scout" \
-    "scout gates section did not distinguish firstmate's acceptance run from worker gauge runs"
+  assert_grep "as an ordinary run" "$scout" \
+    "scout gates section did not say firstmate accepts a report on an ordinary checker run"
+  assert_no_grep "decisive mode for acceptance" "$scout" \
+    "scout gates section promised a decisive acceptance run a scout has no commit to satisfy"
   assert_no_grep "firstmate runs the checker before" "$scout" \
     "scout gates section still promised per-mode decisive-run timing"
   assert_grep "that write is the checker's and firstmate's to judge" "$scout" \

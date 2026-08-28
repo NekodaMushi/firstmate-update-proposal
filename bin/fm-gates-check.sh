@@ -160,11 +160,27 @@
 # --head. Before any CHECK and again after all CHECKs finish, the task copy must
 # be clean and its current commit must equal that delivered commit. An anchor
 # failure prints one "acceptance run refused:" reason, exits 3, and does not replace
-# the prior gates-result.md. A completed decisive run prints its final exit verdict and
+# the prior gates-result.md; the dirty reason names the first paths the copy
+# reports, so a worker's uncommitted work is distinguishable from a CHECK's own
+# leftovers. A completed decisive run prints its final exit verdict and
 # anchored commit in an "acceptance summary:" line on stdout; the caller judges
 # that line from the invocation it launched rather than re-reading the replaceable
 # result file. The ordinary mode omits these guards and keeps its existing output,
 # so workers can gauge gates against in-progress or uncommitted changes.
+#
+# --head comes from the delivery record, never from the copy under check: the PR
+# head sha for a no-mistakes or direct-PR ship, and the tip of the fm/<id> branch
+# firstmate is about to merge for a local-only ship. A commit the copy resolves
+# for itself makes the anchor tautological, so --head takes a commit object name
+# (7 to 64 hex characters) and refuses HEAD, @, branch names and every other
+# revision the copy would interpret. When the delivered commit is ahead of the
+# copy - the pipeline landed fix commits there, say - bring the copy to that
+# commit and re-run, rather than anchoring to what the copy already has.
+#
+# A decisive run also refuses a task with no gates.md and a scout task
+# (kind=scout in its meta). A scout delivers data/<id>/report.md rather than a
+# commit and may keep scratch work in its disposable copy, so there is no commit
+# to anchor to; firstmate accepts a scout on an ordinary run instead.
 #
 # Exit codes:
 #   0 every gate satisfied, and every abandoned gate accepted on this command line.
@@ -174,9 +190,12 @@
 #   2 usage error, a task id that is not a plain name, an unreadable meta or
 #     copy, no worktree= in the meta, or an invalid decisive-mode option pair.
 #   3 --for-acceptance refused because the task copy was dirty, its commit did
-#     not match --head, or either fact could not be read reliably.
-# A task with no data/<id>/gates.md prints "no gates for <id>" and exits 0 without
-# writing gates-result.md: nothing was declared, so nothing is owed.
+#     not match --head, either fact could not be read reliably, the task declares
+#     no gates.md, or the task is a scout.
+# An ordinary run of a task with no data/<id>/gates.md prints "no gates for <id>"
+# and exits 0 without writing gates-result.md: nothing was declared, so nothing is
+# owed. A decisive run refuses that task instead, because an absent contract is
+# not a verdict and the run has nothing to judge.
 #
 # The task id names data/<id>/ and state/<id>.meta, so it is held to a plain name:
 # non-empty, letters, digits, dot, underscore and dash only, never a bare "." and
@@ -187,8 +206,9 @@
 # Options:
 #   --accept-abandon <id>  accept this abandoned gate's reason (repeatable).
 #   --for-acceptance       enable the decisive-run anchor; requires --head.
-#   --head <commit>        delivered commit required by --for-acceptance. The
-#                          value must resolve to a commit in the task copy.
+#   --head <commit>        delivered commit required by --for-acceptance, taken
+#                          from the delivery record and given as a commit object
+#                          name that resolves in the task copy.
 #   --timeout <seconds>    per-CHECK wall clock; default FM_GATES_TIMEOUT or 120.
 #                          A whole number of seconds greater than zero; leading
 #                          zeros are stripped first, so "0", "00" and "000" are
@@ -258,6 +278,16 @@ done
 [ -n "$ID" ] || die "usage: fm-gates-check.sh <task-id> [--accept-abandon <gate-id>]... [--timeout <seconds>]"
 if [ "$ACCEPTANCE" -eq 1 ]; then
   [ -n "$DELIVERED_HEAD" ] || die "--for-acceptance requires --head <commit>"
+  # A revision the copy resolves for itself - HEAD, @, a branch the worker moved -
+  # would anchor the copy to itself and prove nothing, so only an object name from
+  # the delivery record is accepted.
+  case "$DELIVERED_HEAD" in
+    *[!0-9a-fA-F]*)
+      die "--head must be a commit object name taken from the delivery record, not a revision the task copy resolves for itself, got '$DELIVERED_HEAD'" ;;
+  esac
+  if [ ${#DELIVERED_HEAD} -lt 7 ] || [ ${#DELIVERED_HEAD} -gt 64 ]; then
+    die "--head must be a commit object name of 7 to 64 hex characters, got '$DELIVERED_HEAD'"
+  fi
 elif [ -n "$DELIVERED_HEAD" ]; then
   die "--head requires --for-acceptance"
 fi
@@ -276,7 +306,17 @@ GATES="$DATA/$ID/gates.md"
 RESULT="$DATA/$ID/gates-result.md"
 META="$STATE/$ID.meta"
 
+acceptance_refuse() {
+  echo "acceptance run refused: $*" >&2
+  exit 3
+}
+
 if [ ! -f "$GATES" ]; then
+  # The ordinary run owes nothing where nothing was declared, but a decisive run
+  # judged on its exit code would read that silence as acceptance, and the wrong
+  # home or a gates.md archived mid-promotion produces exactly that silence.
+  [ "$ACCEPTANCE" -eq 0 ] ||
+    acceptance_refuse "task $ID declares no gates at $GATES, so a decisive run has nothing to judge"
   echo "no gates for $ID ($GATES absent); nothing to check"
   exit 0
 fi
@@ -285,16 +325,17 @@ COPY=$(grep '^worktree=' "$META" | tail -1 | cut -d= -f2-)
 [ -n "$COPY" ] || die "meta $META has no worktree= line; cannot locate the task's copy"
 [ -d "$COPY" ] || die "task copy $COPY does not exist"
 
-acceptance_refuse() {
-  echo "acceptance run refused: $*" >&2
-  exit 3
-}
-
 assert_acceptance_anchor() {
-  local phase=$1 actual dirty
+  local phase=$1 actual dirty listed extra
   dirty=$(git -C "$COPY" status --porcelain --untracked-files=all 2>/dev/null) ||
     acceptance_refuse "cannot read whether task copy $COPY is clean $phase"
-  [ -z "$dirty" ] || acceptance_refuse "task copy $COPY is dirty $phase"
+  if [ -n "$dirty" ]; then
+    listed=$(printf '%s\n' "$dirty" | head -3 | sed 's/^/[/; s/$/]/' | tr '\n' ' ')
+    listed=${listed% }
+    extra=$(printf '%s\n' "$dirty" | wc -l | tr -d '[:space:]')
+    if [ "$extra" -gt 3 ]; then extra="(+$((extra - 3)) more)"; else extra=; fi
+    acceptance_refuse "task copy $COPY is dirty $phase: $listed${extra:+ $extra}"
+  fi
   actual=$(git -C "$COPY" rev-parse --verify HEAD 2>/dev/null) ||
     acceptance_refuse "cannot read the task copy's commit $phase"
   [ "$actual" = "$DELIVERED_COMMIT" ] ||
@@ -303,6 +344,9 @@ assert_acceptance_anchor() {
 }
 
 if [ "$ACCEPTANCE" -eq 1 ]; then
+  if grep -qx 'kind=scout' "$META"; then
+    acceptance_refuse "task $ID is a scout (kind=scout in $META); a scout delivers a report rather than a commit, so accept it on an ordinary run"
+  fi
   DELIVERED_COMMIT=$(git -C "$COPY" rev-parse --verify "$DELIVERED_HEAD^{commit}" 2>/dev/null) ||
     acceptance_refuse "delivered head '$DELIVERED_HEAD' does not resolve to a commit in task copy $COPY"
   assert_acceptance_anchor "before checks"

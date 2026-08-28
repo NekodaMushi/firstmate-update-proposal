@@ -15,7 +15,8 @@
 #   data/<task-id>/gates.md. It applies to ship and scout briefs, never secondmates.
 #   Where an automatable gate lands follows the brief's own delivery path: the PR
 #   for a no-mistakes or direct-PR ship, the task branch for local-only, and the
-#   report for a scout. The checker header owns firstmate's decisive-run mechanics.
+#   report for a scout. The checker header owns firstmate's decisive-run mechanics,
+#   including why a scout is accepted on an ordinary checker run instead.
 #   The emitted fm-gates-check.sh invocation carries this home's
 #   FM_HOME/FM_DATA_OVERRIDE/FM_STATE_OVERRIDE, because a crewmate pane does not
 #   inherit them and the checker exits 0 on a home holding no gates.md.
@@ -328,10 +329,16 @@ if [ "$GATES" -eq 1 ]; then
 # finds no gates.md and exits 0 - a silent pass. Pin the home on the command itself.
 GATES_CHECK_CMD="FM_HOME=$(shell_quote "$FM_HOME") FM_DATA_OVERRIDE=$(shell_quote "$DATA") FM_STATE_OVERRIDE=$(shell_quote "$STATE") $(shell_quote "$FM_ROOT/bin/fm-gates-check.sh") $(shell_quote "$ID")"
 # The test lands on the delivery path this same brief prescribes below. A scout
-# opens no PR, while a local-only ship never pushes one.
+# opens no PR, while a local-only ship never pushes one. Acceptance is the
+# checker's decisive mode everywhere a commit is delivered, which is every kind
+# but the scout, whose deliverable is a report.
+GATES_GAUGE_OWNER="firstmate's decisive run"
+GATES_ACCEPT_LINE="firstmate separately runs the checker's decisive mode for acceptance, anchored to the commit you deliver"
 case "${KIND}/${MODE}" in
   scout/*)
-    GATES_TEST_LINE="Record every gate that can be expressed as an automated test in the report as a proposed test, so it can land if the scout is promoted; write no test and open no PR here." ;;
+    GATES_TEST_LINE="Record every gate that can be expressed as an automated test in the report as a proposed test, so it can land if the scout is promoted; write no test and open no PR here."
+    GATES_GAUGE_OWNER="firstmate's own run"
+    GATES_ACCEPT_LINE="firstmate separately runs the checker itself before accepting your report, as an ordinary run: a scout delivers a report rather than a commit, so the checker's decisive mode does not apply here" ;;
   ship/local-only)
     GATES_TEST_LINE="Turn every gate that can be expressed as an automated test into a test committed on your \`fm/$ID\` branch, so it travels with the branch firstmate merges." ;;
   ship/direct-PR)
@@ -348,8 +355,8 @@ IFS= read -r -d '' GATES_SECTION <<EOF || true
 Read it, but do not edit it.
 Do not create or modify \`$DATA/$ID/gates-result.md\` yourself; if you run the checker below, the checker alone owns that result-file write.
 $GATES_TEST_LINE
-You may run \`$GATES_CHECK_CMD\` to gauge progress, but only firstmate's decisive run counts.
-A \`done:\` status means only "I believe the gates pass", not "the task is finished"; firstmate separately runs the checker's decisive mode for acceptance.
+You may run \`$GATES_CHECK_CMD\` to gauge progress, but only $GATES_GAUGE_OWNER counts.
+A \`done:\` status means only "I believe the gates pass", not "the task is finished"; $GATES_ACCEPT_LINE.
 If you believe a gate is impossible, append \`blocked: gate <gate-id> impossible - <reason>\` to the status file.
 Never abandon a gate silently, and never write an abandonment into \`$DATA/$ID/gates.md\`.
 EOF

@@ -296,7 +296,8 @@ Any gate that can be translated into an executable test lands as a test in the d
 `data/<task-id>/gates-result.md` is the completion artifact.
 A gate left unsatisfied, never checked, or abandoned without `--accept-abandon` blocks acceptance: the PR is not merged, the task is not recorded done, and a scout's report is not accepted as the Done artifact.
 Only firstmate under its configured authority or the captain may waive such a gate, never the worker; record the gate, why it is invalid, obsolete, or disproportionate, who authorized it, and any replacement check or accepted residual risk, then re-run the checker against the revised contract until the recorded result passes.
-At completion, firstmate runs the checker's decisive mode as the last action before the acceptance decision and judges the verdict summary from that same invocation; the checker's header owns its exact mechanics.
+At completion, firstmate runs the checker's decisive mode as the last action before the acceptance decision and judges the verdict summary from that same invocation, except for a scout, which delivers a report rather than a commit and is accepted on an ordinary run.
+The checker's header owns the exact mechanics of both.
 Write the task-specific brief under section 11 before spawning.
 
 ### Dispatch and supervision handoff

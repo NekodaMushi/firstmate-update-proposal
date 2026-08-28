@@ -49,8 +49,8 @@ pass "fm-gates-check.sh: ordinary gauge runs still allow an in-progress dirty co
 printf 'prior result must survive\n' > "$RESULT"
 out=$(run t1 --for-acceptance --head "$DELIVERED_HEAD" 2>&1); rc=$?
 expect_code 3 "$rc" "dirty copy should get the decisive-run refusal code ($out)"
-assert_contains "$out" "acceptance run refused: task copy $REPO is dirty before checks" \
-  "dirty-copy refusal did not give one clear reason"
+assert_contains "$out" "acceptance run refused: task copy $REPO is dirty before checks: [ M README.md]" \
+  "dirty-copy refusal did not name the paths that made the copy dirty"
 [ "$(cat "$RESULT")" = "prior result must survive" ] \
   || fail "dirty-copy refusal replaced the prior result file"
 git -C "$REPO" restore README.md
@@ -63,5 +63,57 @@ assert_contains "$out" "acceptance run refused: task copy HEAD $DELIVERED_HEAD d
 [ "$(cat "$RESULT")" = "prior result must survive" ] \
   || fail "HEAD-mismatch refusal replaced the prior result file"
 pass "fm-gates-check.sh: a copy at a different HEAD than the delivered commit is refused"
+
+out=$(run t1 --for-acceptance --head HEAD 2>&1); rc=$?
+expect_code 2 "$rc" "a symbolic --head should be a usage error ($out)"
+assert_contains "$out" "--head must be a commit object name taken from the delivery record" \
+  "symbolic --head refusal did not say where the delivered commit comes from"
+out=$(run t1 --for-acceptance --head @ 2>&1); rc=$?
+expect_code 2 "$rc" "--head @ should be a usage error ($out)"
+pass "fm-gates-check.sh: a revision the copy resolves for itself is refused as --head"
+
+out=$(run no-such-task --for-acceptance --head "$DELIVERED_HEAD" 2>&1); rc=$?
+expect_code 3 "$rc" "a decisive run with no gates.md should refuse ($out)"
+assert_contains "$out" "acceptance run refused: task no-such-task declares no gates" \
+  "no-gates decisive refusal did not name the missing contract"
+out=$(run no-such-task 2>&1); rc=$?
+expect_code 0 "$rc" "an ordinary run with no gates.md should stay a no-op ($out)"
+assert_contains "$out" "no gates for no-such-task" "ordinary no-gates run changed its output"
+pass "fm-gates-check.sh: a decisive run refuses a task that declares no gates"
+
+mkdir -p "$HOME_DIR/data/t-scout"
+cp "$GATES" "$HOME_DIR/data/t-scout/gates.md"
+{ printf 'worktree=%s\n' "$REPO"; echo kind=scout; } > "$HOME_DIR/state/t-scout.meta"
+out=$(run t-scout --for-acceptance --head "$DELIVERED_HEAD" 2>&1); rc=$?
+expect_code 3 "$rc" "a scout should be exempt from the decisive run ($out)"
+assert_contains "$out" "acceptance run refused: task t-scout is a scout" \
+  "scout refusal did not say why a scout has no commit to anchor to"
+out=$(run t-scout 2>&1); rc=$?
+expect_code 0 "$rc" "a scout should keep the ordinary checker path ($out)"
+assert_contains "$out" "summary: satisfied=1 unsatisfied=0" "scout ordinary run lost its summary"
+pass "fm-gates-check.sh: a scout is refused a decisive run and keeps the ordinary one"
+
+REPO2="$TMP_ROOT/repo2"
+mkdir -p "$HOME_DIR/data/t2" "$REPO2"
+git -C "$REPO2" init -q
+echo hello > "$REPO2/README.md"
+git -C "$REPO2" -c user.name=t -c user.email=t@t add -A
+git -C "$REPO2" -c user.name=t -c user.email=t@t commit -qm delivered
+DELIVERED_HEAD2=$(git -C "$REPO2" rev-parse HEAD)
+printf 'worktree=%s\n' "$REPO2" > "$HOME_DIR/state/t2.meta"
+cat > "$HOME_DIR/data/t2/gates.md" <<'GATES_EOF'
+- [ ] G1: the check leaves an artifact behind
+  CHECK: touch leftover-artifact.txt && echo ok
+  EXPECT: ok
+  EVIDENCE: pending
+GATES_EOF
+printf 'prior result must survive\n' > "$HOME_DIR/data/t2/gates-result.md"
+out=$(run t2 --for-acceptance --head "$DELIVERED_HEAD2" 2>&1); rc=$?
+expect_code 3 "$rc" "a check that dirties the copy should be caught after the checks ($out)"
+assert_contains "$out" "acceptance run refused: task copy $REPO2 is dirty after checks: [?? leftover-artifact.txt]" \
+  "post-check refusal did not name the phase and the leftover path"
+[ "$(cat "$HOME_DIR/data/t2/gates-result.md")" = "prior result must survive" ] \
+  || fail "post-check refusal replaced the prior result file"
+pass "fm-gates-check.sh: a check that dirties the copy is refused after the checks"
 
 echo "all fm-gates-check decisive tests passed"
