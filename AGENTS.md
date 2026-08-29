@@ -295,10 +295,10 @@ For a gated task, firstmate writes `data/<task-id>/gates.md` at intake using the
 Any gate that can be translated into an executable test lands as a test in the delivery; a scout writes no test and records it in its report as a proposed test instead.
 `data/<task-id>/gates-result.md` is the completion artifact.
 A gate left unsatisfied, never checked, or abandoned without `--accept-abandon` blocks acceptance: the PR is not merged, the task is not recorded done, and a scout's report is not accepted as the Done artifact.
-Only firstmate under its configured authority or the captain may waive such a gate, never the worker; record the gate, why it is invalid, obsolete, or disproportionate, who authorized it, and any replacement check or accepted residual risk, then re-run the checker against the revised contract until the recorded result passes.
-A result passes when it records `exit=0`, and the checker's header owns the exact conditions behind that code.
-The checker verifies the task's copy as it stands on disk, uncommitted changes included, rather than any particular commit.
-At completion, firstmate runs `bin/fm-gates-check.sh <task-id>` itself as the last action before the acceptance decision, on a copy that is clean and matches what is being landed, and judges only that run's own result, because `gates-result.md` carries no run identity and any process with the home can have replaced it, so a result found on disk is never acceptance evidence.
+Only firstmate under its configured authority or the captain may waive such a gate, never the worker; record the gate, why it is invalid, obsolete, or disproportionate, who authorized it, and any replacement check or accepted residual risk, then re-run the checker against the revised contract until it passes.
+At completion, firstmate runs the checker's decisive mode as the last action before the acceptance decision and judges the verdict summary from that same invocation, except for a scout, which delivers a report rather than a commit and is accepted on an ordinary run.
+Either way firstmate judges the run it launched itself and never a `gates-result.md` read from disk, which carries no run identity and any process with the home can have replaced.
+The checker's header owns the exact mechanics of both.
 Write the task-specific brief under section 11 before spawning.
 
 ### Dispatch and supervision handoff
@@ -387,7 +387,7 @@ When a scout's deliverable is a visual artifact the captain will iterate on, pre
 When implementation is separately authorized, promote the existing scout through `bin/fm-promote.sh` rather than creating a duplicate task.
 The promoted worker must inventory scratch state, return to a clean default-branch base, carry over only intended fix changes, create the ship branch, and follow the project's selected delivery path while leaving scratch commits and debug edits behind and turning a reproduced bug into the regression test.
 `bin/fm-promote.sh` flips the contract without touching gates, so first archive the scout's `gates.md` and `gates-result.md` together and unedited under `data/<id>/archive/scout/`, deleting neither, then immediately write the fresh ship `gates.md`; promotion is incomplete and the promoted worker is sent no ship instructions until that file exists.
-Promotion carries the worker-facing contract too, so restate in the ship instructions that gates now land as tests in the delivery and that the checker runs at this task's ship phase, superseding the scout section's no-test, no-PR, and check-at-report wording that promotion does not regenerate.
+Promotion carries the worker-facing contract too, so restate in the ship instructions that gates now land as tests in the delivery and that acceptance is now firstmate's decisive checker run anchored to the commit the worker delivers, superseding the scout section's no-test, no-PR, and ordinary-run wording that promotion does not regenerate.
 Carry gates over explicitly: translate each still-applicable scout gate into a ship gate and record the mapping, so a reproduced bug becomes a gate on its regression test being present and passing, and keep unresolved scout uncertainty as an explicit ship gate or a recorded risk rather than losing a negative finding.
 
 ## 8. Supervision protocol
