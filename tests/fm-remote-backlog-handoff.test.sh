@@ -287,7 +287,7 @@ pass "concurrent handoffs serialize staging through confirmed cleanup"
 # move refusal proves a retry is needed. The dead pid and age satisfy the same
 # conservative procedure tasks-axi prints.
 write_backlog '- [ ] stale-lock-item - remote stale lock recovery (repo: alpha)'
-printf '999999:abandoned:0:1\n' > "$REMOTE/data/backlog.md.lock"
+printf '%s:abandoned:0:1\n' "$(fm_dead_pid)" > "$REMOTE/data/backlog.md.lock"
 if [ "$(uname 2>/dev/null)" = Darwin ]; then
   touch -t 202001010000 "$REMOTE/data/backlog.md.lock"
 else

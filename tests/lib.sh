@@ -144,6 +144,25 @@ fm_test_reap_orphans() {
 
 fm_test_reap_orphans
 
+# --- provably dead pids -----------------------------------------------------
+#
+# fm_dead_pid echoes a pid no process on this host can hold: one above the
+# kernel's pid ceiling (/proc/sys/kernel/pid_max) on Linux, or 999999 where
+# that ceiling is not readable (macOS pins PID_MAX at 99999). Fixtures use it
+# for "dead lock holder" content. A hardcoded literal such as 999999 is NOT
+# dead by assumption: on Linux hosts with kernel.pid_max raised to its 4194304
+# maximum a real process can occupy it, which flips every kill(pid, 0) liveness
+# probe in the code under test and makes the fixture's "stale" lock read live.
+
+fm_dead_pid() {
+  local pid_max
+  pid_max=$(cat /proc/sys/kernel/pid_max 2>/dev/null || true)
+  case "$pid_max" in
+    '' | *[!0-9]*) printf '999999\n' ;;
+    *) printf '%s\n' "$((pid_max + 1))" ;;
+  esac
+}
+
 # --- fakebin / PATH shims ---------------------------------------------------
 #
 # fm_fakebin <dir> creates <dir>/fakebin and echoes it; prepend it to PATH to
