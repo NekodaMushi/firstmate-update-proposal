@@ -151,6 +151,49 @@ test_invalid_current_encodings_are_rejected() {
   pass "operational input: current construction rejects legacy kinds and empty bodies"
 }
 
+test_encoder_stdin_epipe_rejects_instead_of_killing_the_host() {
+  local fake_root output status
+  fake_root=$(fm_test_tmproot fm-operational-input-epipe) \
+    || fail "could not create the EPIPE fixture root"
+  mkdir -p "$fake_root/bin" \
+    || fail "could not create the EPIPE fixture bin directory"
+  cat > "$fake_root/bin/fm-operational-input.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "encoder refused this payload without reading stdin" >&2
+exit 3
+SH
+  chmod +x "$fake_root/bin/fm-operational-input.sh" \
+    || fail "could not make the EPIPE fixture encoder executable"
+
+  output=$(FM_TEST_ROOT="$fake_root" HELPER="$ROOT/.opencode/plugins/lib/fm-operational-input.js" \
+    node --input-type=module <<'JS'
+import { pathToFileURL } from "node:url";
+const { encodeFirstmateOperationalInput } = await import(pathToFileURL(process.env.HELPER).href);
+// 256 KiB exceeds the 64 KiB kernel pipe buffer, so the stdin write cannot be
+// absorbed by the buffer and EPIPEs deterministically once the encoder exits.
+const content = "x".repeat(256 * 1024);
+try {
+  const encoded = await encodeFirstmateOperationalInput(process.env.FM_TEST_ROOT, "watcher", content);
+  process.stdout.write(`RESOLVED:${encoded}`);
+} catch (err) {
+  process.stdout.write(`REJECTED:${err.message}`);
+}
+JS
+  )
+  status=$?
+
+  [ "$status" -eq 0 ] \
+    || fail "an encoder exiting without reading stdin killed the adapter host (exit $status)"
+  case $output in
+    REJECTED:*) ;;
+    RESOLVED:*) fail "the adapter accepted a failed encode as a valid envelope" ;;
+    *) fail "the adapter host produced no verdict for the unread-stdin encoder: $output" ;;
+  esac
+  [ "$output" = "REJECTED:encoder refused this payload without reading stdin" ] \
+    || fail "the adapter lost the encoder's own failure verdict: $output"
+  pass "operational input: an encoder exiting without reading stdin rejects through its exit code instead of killing the host"
+}
+
 test_current_generic_matrix
 test_current_from_firstmate_carrier
 test_landed_untyped_prefix_is_explicitly_legacy
@@ -158,3 +201,4 @@ test_isolated_legacy_matrix
 test_genuine_near_misses_remain_unclassified
 test_cross_language_adapter_uses_the_owner
 test_invalid_current_encodings_are_rejected
+test_encoder_stdin_epipe_rejects_instead_of_killing_the_host
