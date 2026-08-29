@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Canonical current and isolated legacy operational-input protocol matrices.
+# Canonical current and isolated legacy operational-input protocol matrices,
+# plus the cross-language adapter's verdict when the encoder fails.
 set -u
 
 # shellcheck source=tests/lib.sh
