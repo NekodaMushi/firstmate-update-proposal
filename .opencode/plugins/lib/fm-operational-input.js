@@ -32,6 +32,10 @@ export function encodeFirstmateOperationalInput(root, kind, content) {
       }
       reject(new Error(stderr.trim() || `operational-input encoder exited ${code ?? "unknown"}`));
     });
+    // An encoder that exits without reading stdin EPIPEs this write; without a
+    // stdin error handler that lands as an unhandled 'error' event and kills
+    // the plugin host instead of rejecting through the close handler above.
+    child.stdin.on("error", () => {});
     child.stdin.end(content);
   });
 }

@@ -22,6 +22,10 @@ function runProcess(command, args, input = "") {
     });
     child.on("error", () => resolve({ code: 0, stdout: "", stderr: "" }));
     child.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
+    // A child that exits without reading stdin EPIPEs this write; without a
+    // stdin error handler that lands as an unhandled 'error' event and kills
+    // the whole plugin host instead of yielding the child's exit code.
+    child.stdin.on("error", () => {});
     child.stdin.end(input);
   });
 }
