@@ -6,12 +6,12 @@
 #   . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 #
 # It provides the boilerplate every test file used to re-roll: ok/not-ok
-# reporters, a self-cleaning temp root, fakebin/PATH-shim helpers, deterministic
-# git identity and fixture builders, state/<id>.meta writers, and the common
-# string/exit-code/file assertions. It deliberately does NOT bundle the
-# behavior-specific fake tmux/treehouse/no-mistakes mocks: those encode terminal
-# and lifecycle assumptions that differ per suite and belong with the tests that
-# own them.
+# reporters, a self-cleaning temp root, provably dead pids for lock fixtures,
+# fakebin/PATH-shim helpers, deterministic git identity and fixture builders,
+# state/<id>.meta writers, and the common string/exit-code/file assertions. It
+# deliberately does NOT bundle the behavior-specific fake
+# tmux/treehouse/no-mistakes mocks: those encode terminal and lifecycle
+# assumptions that differ per suite and belong with the tests that own them.
 #
 # ROOT is exported as the firstmate repo root (this file lives in tests/), so a
 # sourcing test can use "$ROOT/bin/..." without recomputing it.
@@ -143,6 +143,25 @@ fm_test_reap_orphans() {
 }
 
 fm_test_reap_orphans
+
+# --- provably dead pids -----------------------------------------------------
+#
+# fm_dead_pid echoes a pid no process on this host can hold: one above the
+# kernel's pid ceiling (/proc/sys/kernel/pid_max) on Linux, or 999999 where
+# that ceiling is not readable (macOS pins PID_MAX at 99999). Fixtures use it
+# for "dead lock holder" content. A hardcoded literal such as 999999 is NOT
+# dead by assumption: on Linux hosts with kernel.pid_max raised to its 4194304
+# maximum a real process can occupy it, which flips every kill(pid, 0) liveness
+# probe in the code under test and makes the fixture's "stale" lock read live.
+
+fm_dead_pid() {
+  local pid_max
+  pid_max=$(cat /proc/sys/kernel/pid_max 2>/dev/null || true)
+  case "$pid_max" in
+    '' | *[!0-9]*) printf '999999\n' ;;
+    *) printf '%s\n' "$((pid_max + 1))" ;;
+  esac
+}
 
 # --- fakebin / PATH shims ---------------------------------------------------
 #
