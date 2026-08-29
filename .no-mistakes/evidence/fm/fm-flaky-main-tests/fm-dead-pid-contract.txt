@@ -1,0 +1,7 @@
+== fm_dead_pid on this host (Linux, kernel.pid_max = 4194304)
+fm_dead_pid            -> 4194305
+kill -0 result        -> /bin/bash: line 18: kill: (4194305) - No such process
+(the old literal 999999 is a plain in-range pid on this host: 999999 < 4194304)
+
+== fallback branch, pid_max made unreadable (macOS-like host)
+fm_dead_pid            -> 999999

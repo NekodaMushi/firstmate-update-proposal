@@ -1,0 +1,46 @@
+=== BASE c3052ba (before the fix) (/tmp/fm-repro/base)
+kernel.pid_max        : 4194304
+PID 999999            : held by a live process (sleep 900 )
+kill(999999, 0)       : ALIVE  <- the literal the old fixtures called a dead lock holder
+
+----- bin/fm-test-run.sh tests/fm-pi-watch-extension.test.sh
+FM_TEST_BEGIN 2026-08-29T09:52:20Z tests/fm-pi-watch-extension.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - Pi extension reports external healthy watcher output
+ok - Pi custom tool exposes repair-only metadata and returns automatic-continuation guidance
+ok - Pi redundant tool call returns ownership guidance and spawns no second child
+ok - Pi scheduled retry remains extension-owned after another tool call
+ok - Pi actionable close starts one successor before wake delivery settles
+ok - Pi refused handling handshake is classified and not swallowed
+ok - Pi hung successor falls back to one typed actionable wake
+ok - Pi unretired successor falls back without an overlapping retry
+ok - Pi late unretired closes resume classified supervision
+ok - Pi clean empty close triggers a bounded continuity retry
+ok - Pi established clean closes stop at the configured retry limit
+ok - Pi close handler verifies session-lock ownership before successor launch
+not ok - Pi watcher arm must distinguish owned, live-other, and missing or dead session locks: expected exit 0, got 1
+FM_TEST_END 2026-08-29T09:52:34Z tests/fm-pi-watch-extension.test.sh exit=1 duration_ms=14624 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=1 skipped_gate=0 duration_ms=14651
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=1 duration_ms=14624 failed=1
+FM_TEST_SLOWEST rank=1 script=tests/fm-pi-watch-extension.test.sh duration_ms=14624
+----- exit=1
+
+----- bin/fm-test-run.sh tests/fm-remote-backlog-handoff.test.sh
+FM_TEST_BEGIN 2026-08-29T09:52:34Z tests/fm-remote-backlog-handoff.test.sh family=secondmate expected_gate_skip=none
+ok - confined put rejects incomplete and superseded payload generations
+ok - confined put rejects directory replacement without external writes
+ok - ambiguous receipt leaves one durable outbox and no duplicate dispatchable source
+ok - re-delivery after unknown completion converges without duplication
+ok - dropped transfer recovery overwrites scratch and delivers exactly once
+ok - concurrent handoffs serialize staging through confirmed cleanup
+error: "backlog lock looks stale: /tmp/fm-remote-handoff.QozKxn/remote/data/backlog.md.lock"
+code: LOCKED
+help[1]: "If no tasks-axi process is running, remove /tmp/fm-remote-handoff.QozKxn/remote/data/backlog.md.lock and retry"
+error: atomic backlog receipt failed; delivered outbox is preserved for retry
+error: handoff receipt by ios was unavailable or completion is unknown; outbox preserved at /tmp/fm-remote-handoff.QozKxn/parent/data/handoff/ios.outbox.md
+not ok - host-local stale lock recovery did not retry receipt
+FM_TEST_END 2026-08-29T09:52:47Z tests/fm-remote-backlog-handoff.test.sh exit=1 duration_ms=12387 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=1 skipped_gate=0 duration_ms=12412
+FM_TEST_SUMMARY_FAMILY family=secondmate count=1 duration_ms=12387 failed=1
+FM_TEST_SLOWEST rank=1 script=tests/fm-remote-backlog-handoff.test.sh duration_ms=12387
+----- exit=1
+
